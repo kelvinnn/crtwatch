@@ -1,0 +1,10 @@
+.venv/
+data/
+dist/
+build/
+.claude/
+.git/
+**/__pycache__/
+*.db
+*.db-*
+.env

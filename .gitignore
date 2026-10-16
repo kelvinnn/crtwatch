@@ -1,0 +1,18 @@
+# Local environment and your own data: never commit these
+.venv/
+data/
+*.db
+*.db-shm
+*.db-wal
+.env
+.claude/
+
+# Build output (release files are attached to GitHub Releases instead)
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.pyc
+
+# macOS Finder metadata
+.DS_Store

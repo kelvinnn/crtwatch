@@ -1,0 +1,7 @@
+project,pattern,group,domain
+Shop,shop.acme.com,retail,acme.com
+Shop,*.shop.acme.com,retail,
+Shop Admin,shop-admin.acme-ops.io,retail,acme-ops.io
+Payroll,payroll.acme.com,internal,
+Payroll,*.payroll.acme.com,internal,
+Partner Portal,partners.acme-ops.io,partners,

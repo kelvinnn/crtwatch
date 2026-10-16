@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>crtwatch</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #fff; --ink: #1b1f24; --muted: #646d78; --line: #e2e5ea; --accent: #2457d6;
+  --crit: #b4232c; --high: #d9622b; --med: #b98900; --low: #5a7184; --info: #6b7280; --ok: #1f8a4c; --chip: #eef1f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111418; --panel: #181c21; --ink: #e5e8ec; --muted: #9aa3ad; --line: #2a3038; --accent: #6e9bff;
+          --crit: #ff6b73; --high: #ff9a5c; --med: #e8c14d; --low: #93a8bb; --info: #9aa3ad; --ok: #4cc983; --chip: #232931; }
+}
+* { box-sizing: border-box; }
+html, body { overflow-x: clip; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+.top { position: sticky; top: 0; z-index: 5; }
+header { display: flex; align-items: center; gap: 24px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
+nav { display: flex; gap: 4px; flex-wrap: wrap; }
+nav button { background: none; border: 0; padding: 6px 12px; border-radius: 6px; color: var(--muted); cursor: pointer; font: inherit; }
+nav button.on { background: var(--chip); color: var(--ink); font-weight: 600; }
+#progress { display: none; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 20px; font-size: 13px; }
+#progress.on { display: block; }
+#progress .line { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; max-width: 1240px; margin: 0 auto; }
+#progress .bar { height: 3px; background: var(--chip); border-radius: 2px; overflow: hidden; max-width: 1240px; margin: 8px auto 0; }
+#progress .bar i { display: block; height: 100%; width: 30%; background: var(--accent); border-radius: 2px; animation: slide 1.4s ease-in-out infinite; }
+@keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) { #progress .bar i { animation: none; width: 100%; opacity: .5; } }
+#progress .done { color: var(--ok); } #progress .fail { color: var(--crit); }
+#progress button { margin-left: auto; }
+.spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: rot .8s linear infinite; vertical-align: -1px; }
+@keyframes rot { to { transform: rotate(360deg); } }
+main { padding: 20px; max-width: 1280px; margin: 0 auto; }
+section { display: none; } section.on { display: block; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.tile b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+.tile span { color: var(--muted); font-size: 12px; }
+h2 { font-size: 15px; margin: 0 0 12px; }
+a { color: var(--accent); }
+.grid2 > .panel { margin-bottom: 0; }
+.muted { color: var(--muted); }
+.sev { display: inline-block; min-width: 62px; text-align: center; font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px; color: #fff; text-transform: uppercase; }
+.sev.critical { background: var(--crit); } .sev.high { background: var(--high); } .sev.medium { background: var(--med); }
+.sev.low { background: var(--low); } .sev.info { background: var(--info); }
+details.finding { border-top: 1px solid var(--line); padding: 10px 0; }
+details.finding:first-of-type { border-top: 0; }
+details.finding summary { cursor: pointer; display: flex; gap: 10px; align-items: baseline; }
+details.finding .body { padding: 8px 0 0 72px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.chip { background: var(--chip); border-radius: 4px; padding: 1px 6px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.chip button { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 0 0 4px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; background: var(--panel); }
+.tablebox { max-height: calc(100vh - 230px); min-height: 200px; overflow: auto; }
+.tablebox table { border-collapse: separate; border-spacing: 0; min-width: 760px; }  /* collapsed borders let rows bleed past sticky headers */
+.tablebox th { position: sticky; top: 0; z-index: 1; }
+.nowrap { white-space: nowrap; }
+td.mono, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
+tr.ignored td { opacity: .45; }
+input, select, textarea, button.btn { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+textarea { width: 100%; min-height: 90px; font-family: ui-monospace, monospace; font-size: 12.5px; }
+button.btn { cursor: pointer; } button.btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.btn.small { padding: 2px 8px; font-size: 12px; } button.btn.danger { color: var(--crit); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.radius .proj { font-weight: 600; } .radius li { margin: 2px 0; }
+.ok { color: var(--ok); } .bad { color: var(--crit); }
+.scroll { overflow-x: auto; }
+#drawer { position: fixed; top: 0; right: 0; width: min(560px, 100vw); height: 100vh; background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 16px; transform: translateX(100%); visibility: hidden; transition: transform .15s, visibility .15s; z-index: 10; }
+#drawer.on { transform: none; visibility: visible; }
+.cert { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+@media (max-width: 640px) { main { padding: 12px 16px; } header, #progress { padding-left: 16px; padding-right: 16px; } details.finding .body { padding-left: 0; } }
+</style>
+</head>
+<body>
+<div class="top">
+<header>
+  <h1>crtwatch</h1>
+  <nav id="nav">
+    <button data-tab="overview" class="on">Overview</button>
+    <button data-tab="domains">Domains</button>
+    <button data-tab="projects">Projects</button>
+    <button data-tab="hosts">Hosts</button>
+    <button data-tab="separation">Separation</button>
+    <button data-tab="activity">Activity</button>
+  </nav>
+</header>
+<div id="progress"></div>
+</div>
+<main>
+  <section id="overview" class="on">
+    <div class="tiles" id="tiles"></div>
+    <div class="panel"><h2>Findings</h2><div id="findings" class="muted">Loading…</div></div>
+    <div class="panel"><h2>Blast radius: what an attacker reaches from each project</h2>
+      <p class="muted" style="margin-top:-6px">Repeats two free pivots until nothing new turns up: search crt.sh for a host's root domain, and read every name on its certificates.</p>
+      <div id="radius" class="grid2"></div></div>
+  </section>
+
+  <section id="domains">
+    <div class="panel">
+      <h2>Add domains</h2>
+      <textarea id="newDomains" placeholder="one root domain per line&#10;acme.com&#10;acme-shop.io"></textarea>
+      <div class="row" style="margin-top:8px">
+        <label><input type="checkbox" id="scanAfter" checked> scan after adding</label>
+        <button class="btn primary" id="addDomains">Add</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="row"><h2 style="margin:0">Inventory</h2>
+        <span style="flex:1"></span>
+        <label><input type="checkbox" id="scanDns"> resolve DNS after</label>
+        <button class="btn" id="scanAll">Scan all</button>
+        <button class="btn" id="dnsAll">DNS check</button></div>
+      <div class="scroll"><table id="domainTable"></table></div>
+    </div>
+  </section>
+
+  <section id="projects">
+    <div class="panel">
+      <h2>New project</h2>
+      <div class="row"><input id="pName" placeholder="Project name" style="min-width:240px"></div>
+      <textarea id="pRules" placeholder="hostname patterns, one per line (* matches anything, including dots)&#10;shop.acme.com&#10;*.shop.acme.com&#10;shop-api*.acme.io"></textarea>
+      <div class="row" style="margin-top:8px"><button class="btn primary" id="addProject">Create</button></div>
+    </div>
+    <div id="projectList" class="grid2"></div>
+  </section>
+
+  <section id="hosts">
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <div class="row" style="margin:0">
+          <select id="fDomain"><option value="">all domains</option></select>
+          <select id="fProject"><option value="">all projects</option></select>
+          <input id="fQ" placeholder="filter by name">
+        </div>
+        <div class="row" style="margin:0">
+          <span id="selCount" class="muted"></span>
+          <select id="bulkProject"></select>
+          <button class="btn" id="bulkAssign">Assign</button>
+          <button class="btn" id="bulkIgnore">Ignore</button>
+          <button class="btn" id="bulkUnignore">Unignore</button>
+        </div>
+      </div>
+      <div class="tablebox"><table id="hostTable"></table></div>
+    </div>
+  </section>
+
+  <section id="separation">
+    <div class="panel">
+      <h2>Who may be seen together</h2>
+      <p class="muted" style="margin-top:-6px">Projects in the same exposure group may share a domain or certificate. Projects in different groups must not be reachable from each other. Leave the group empty to skip checking a project. The planned domain is where the project will move to.</p>
+      <div class="scroll"><table id="groupTable"></table></div>
+      <datalist id="groupList"></datalist>
+      <h2 style="margin-top:16px">Never-together pairs</h2>
+      <div class="row"><select id="pairA"></select><span>must never be seen with</span><select id="pairB"></select><button class="btn" id="addPair">Add</button></div>
+      <div id="pairList" class="chips"></div>
+    </div>
+    <div class="panel"><h2>Violations: projects that can currently be seen together</h2><div id="violations"></div></div>
+    <div class="panel"><h2>Rotation plan</h2><div id="plan"></div></div>
+    <div class="grid2">
+      <div class="panel"><h2>Vet a new domain</h2>
+        <p class="muted" style="margin-top:-6px">Checks CT history before you rotate a project to the domain. Clean = no certificates ever, and nothing linking it to your domains.</p>
+        <div class="row"><input id="candDomain" placeholder="new-domain.com" style="flex:1"><button class="btn primary" id="candGo">Check</button></div>
+        <div class="scroll"><table id="candTable"></table></div></div>
+      <div class="panel"><h2>Checklist for every rotation</h2><ol id="checklist" style="padding-left:18px;margin:0"></ol></div>
+    </div>
+  </section>
+
+  <section id="activity">
+    <div class="grid2">
+      <div class="panel"><h2>New in CT logs</h2><div class="scroll"><table id="eventTable"></table></div></div>
+      <div class="panel"><h2>Scans</h2><div class="scroll"><table id="scanTable"></table></div></div>
+    </div>
+  </section>
+</main>
+<div id="drawer"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const api = async (path, opts = {}) => {
+  const r = await fetch(path, {headers: {"Content-Type": "application/json"}, ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined});
+  if (!r.ok) throw new Error((await r.text()) || r.status);
+  return r.json();
+};
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const fmtDate = s => s ? String(s).slice(0, 10) : "";
+let projects = [], selected = new Set(), hostRows = [];
+
+document.querySelectorAll("#nav button").forEach(b => b.onclick = () => show(b.dataset.tab));
+function show(tab) {
+  document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+  document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === tab));
+  try { localStorage.setItem("crtwatch.tab", tab); } catch (e) {}
+  if (location.hash !== "#" + tab) history.replaceState(null, "", "#" + tab);
+  ({overview: loadOverview, domains: loadDomains, projects: loadProjects, hosts: loadHosts, activity: loadActivity, separation: loadSeparation})[tab]();
+}
+
+// ---- overview
+async function loadOverview() {
+  const s = await api("/api/summary");
+  const c = s.counts, f = c.findings;
+  $("#tiles").innerHTML = [
+    ["Domains", c.domains], ["Projects", c.projects], ["Hosts", c.hosts], ["Unassigned", c.unassigned],
+    ["Certificates", c.certs], ["Critical / High", `${f.critical} / ${f.high}`],
+    ["Separation violations", c.grouped_projects ? c.violations : "set groups"]
+  ].map(([k, v]) => `<div class="tile"><b>${esc(v)}</b><span>${k}</span></div>`).join("");
+  $("#findings").innerHTML = s.findings.length ? s.findings.map(renderFinding).join("") :
+    `<p class="muted">No findings yet. Add domains, scan them, then map hosts to projects.</p>`;
+  $("#radius").innerHTML = s.blast_radius.length ? s.blast_radius.map(r => `
+    <div class="radius"><div class="proj">${esc(r.project)} <span class="muted">(${plural(r.own_hosts, "host")})</span></div>
+    ${Object.keys(r.exposes).length ? `<div class="muted">reaches ${plural(r.reachable_hosts, "other host")} via ${r.roots_touched.map(esc).join(", ")}</div>
+      <ul>${Object.entries(r.exposes).map(([p, e]) => `<li><b>${esc(p)}</b>: ${plural(e.hosts, "host")}, ${plural(e.hops, "hop")}
+        <div class="muted mono" style="font-size:11.5px">e.g. ${esc(e.example)} via ${esc(e.how)}</div></li>`).join("")}</ul>`
+      : `<div class="ok">Isolated: nothing else is reachable.</div>`}</div>`).join("")
+    : `<p class="muted">Create projects to see their blast radius.</p>`;
+}
+function renderFinding(f) {
+  let extra = "";
+  if (f.projects && !Array.isArray(f.projects)) {
+    extra = Object.entries(f.projects).map(([p, hs]) => `<div style="margin-top:6px"><b>${esc(p)}</b> <span class="muted">(${f.counts[p]})</span>
+      <div class="chips">${hs.slice(0, 30).map(h => `<span class="chip">${esc(h)}</span>`).join("")}</div></div>`).join("");
+  } else if (f.hosts) {
+    extra = `<div class="chips">${f.hosts.slice(0, 60).map(h => `<span class="chip">${esc(h)}</span>`).join("")}${f.hosts.length > 60 ? " …" : ""}</div>`;
+  }
+  if (f.example_cert) extra += `<div class="muted" style="margin-top:6px">${f.certs} certificate(s), ${f.active_certs} still valid. Latest issued ${fmtDate(f.latest_issued)}. Example: ${esc(f.example_cert)}</div>`;
+  return `<details class="finding"><summary><span class="sev ${f.severity}">${f.severity}</span><span>${esc(f.title)}</span></summary>
+    <div class="body"><div>${esc(f.detail)}</div>${extra}</div></details>`;
+}
+
+// ---- domains
+function domainStatus(d) {
+  const run = job.scans.find(s => s.domain === d.name);
+  if (run || job.current === d.name) return `<span class="spin"></span> scanning<div class="muted" style="font-size:12px">${esc(run?.stage || "starting")}</div>`;
+  if (job.queue.includes(d.name)) return `<span class="muted">queued (#${job.queue.indexOf(d.name) + 1})</span>`;
+  if (!d.last_scan_at) return `<span class="muted">never scanned</span>`;
+  return esc(d.last_scan_status || "");
+}
+async function loadDomains() {
+  const rows = await api("/api/domains");
+  $("#domainTable").innerHTML = `<tr><th>Domain</th><th>Hosts</th><th>Last scan</th><th>Status</th><th></th></tr>` +
+    (rows.length ? rows.map(d => `<tr>
+      <td class="mono">${esc(d.name)}${d.enabled ? "" : ' <span class="muted">(paused)</span>'}</td>
+      <td>${d.hosts}</td><td>${esc(d.last_scan_at ? d.last_scan_at.replace("T", " ").slice(0, 16) : "never")}</td>
+      <td>${domainStatus(d)}${d.last_error ? `<div class="muted" style="font-size:12px">${esc(Object.keys(JSON.parse(d.last_error)).join(", "))} failed</div>` : ""}</td>
+      <td style="white-space:nowrap"><button class="btn small" onclick="scanOne('${esc(d.name)}')">Scan</button>
+        <button class="btn small" onclick="toggleDomain('${esc(d.name)}', ${d.enabled ? 0 : 1})">${d.enabled ? "Pause" : "Resume"}</button>
+        <button class="btn small danger" onclick="delDomain('${esc(d.name)}')">Remove</button></td></tr>`).join("")
+    : `<tr><td colspan="5" class="muted">No domains yet.</td></tr>`);
+}
+$("#addDomains").onclick = async () => {
+  const r = await api("/api/domains", {method: "POST", body: {names: $("#newDomains").value, scan: $("#scanAfter").checked}});
+  $("#newDomains").value = r.invalid.join("\n");
+  if (r.invalid.length) alert("Not added (not a domain): " + r.invalid.join(", "));
+  if (r.added.length) flash(`Added ${r.added.join(", ")}${$("#scanAfter").checked ? ". Scan queued." : ". Not scanned yet: press Scan when ready."}`, false, 8000);
+  await pollJob(true); loadDomains();
+};
+$("#scanAll").onclick = () => startScan(null);
+$("#dnsAll").onclick = async () => { await api("/api/dns", {method: "POST"}); pollJob(true); };
+window.scanOne = name => startScan([name]);
+async function startScan(domains) {
+  await api("/api/scan", {method: "POST", body: {domains, dns: $("#scanDns").checked}});
+  pollJob(true);
+}
+window.toggleDomain = async (n, en) => { await api(`/api/domains/${n}`, {method: "PATCH", body: {enabled: !!en}}); loadDomains(); };
+window.delDomain = async n => { if (confirm(`Remove ${n} and all its hosts from the inventory?`)) { await api(`/api/domains/${n}`, {method: "DELETE"}); loadDomains(); } };
+
+// ---- projects
+async function loadProjects() {
+  projects = await api("/api/projects");
+  $("#projectList").innerHTML = projects.length ? projects.map(p => `<div class="panel">
+    <div class="row" style="justify-content:space-between"><b>${esc(p.name)}</b><span class="muted">${plural(p.hosts, "host")}</span></div>
+    <div class="chips">${p.rules.map(r => `<span class="chip">${esc(r.pattern)}<button title="remove" onclick="delRule(${r.id})">×</button></span>`).join("") || '<span class="muted">no patterns yet</span>'}</div>
+    <div class="row" style="margin-top:10px"><input id="rule-${p.id}" placeholder="add pattern, e.g. *.shop.acme.com" style="flex:1">
+      <button class="btn small" onclick="addRule(${p.id})">Add</button>
+      <button class="btn small danger" onclick="delProject(${p.id}, '${esc(p.name)}')">Delete</button></div></div>`).join("")
+    : `<p class="muted">No projects yet.</p>`;
+}
+$("#addProject").onclick = async () => {
+  const name = $("#pName").value.trim(); if (!name) return;
+  const rules = $("#pRules").value.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
+  await api("/api/projects", {method: "POST", body: {name, rules}});
+  $("#pName").value = ""; $("#pRules").value = ""; loadProjects();
+};
+window.addRule = async id => { const v = $(`#rule-${id}`).value; if (!v.trim()) return; await api(`/api/projects/${id}/rules`, {method: "POST", body: {patterns: v}}); loadProjects(); };
+window.delRule = async id => { await api(`/api/rules/${id}`, {method: "DELETE"}); loadProjects(); };
+window.delProject = async (id, n) => { if (confirm(`Delete project ${n}? Its hosts become unassigned.`)) { await api(`/api/projects/${id}`, {method: "DELETE"}); loadProjects(); } };
+
+// ---- hosts
+async function loadHosts() {
+  const [doms, projs] = await Promise.all([api("/api/domains"), api("/api/projects")]);
+  projects = projs;
+  const keep = (sel, opts) => { const v = sel.value; sel.innerHTML = opts; sel.value = v; };
+  keep($("#fDomain"), `<option value="">all domains</option>` + doms.map(d => `<option>${esc(d.name)}</option>`).join(""));
+  keep($("#fProject"), `<option value="">all projects</option><option>(unassigned)</option>` + projs.map(p => `<option>${esc(p.name)}</option>`).join(""));
+  keep($("#bulkProject"), `<option value="">— no project —</option>` + projs.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join(""));
+  await refreshHosts();
+}
+async function refreshHosts() {
+  const qs = new URLSearchParams();
+  if ($("#fDomain").value) qs.set("domain", $("#fDomain").value);
+  if ($("#fProject").value) qs.set("project", $("#fProject").value);
+  if ($("#fQ").value) qs.set("q", $("#fQ").value);
+  hostRows = await api("/api/hosts?" + qs);
+  selected = new Set([...selected].filter(n => hostRows.some(r => r.name === n)));
+  const dnsCls = s => s === "live" ? "ok" : s === "dangling" ? "bad" : "muted";
+  $("#hostTable").innerHTML = `<tr><th><input type="checkbox" id="selAll"></th><th>Host</th><th>Project</th><th>Certs</th><th>Valid cert</th><th>Shares cert with</th><th>DNS</th><th class="nowrap">First seen</th></tr>` +
+    hostRows.slice(0, 3000).map(r => `<tr class="${r.ignored ? "ignored" : ""}">
+      <td><input type="checkbox" data-h="${esc(r.name)}" ${selected.has(r.name) ? "checked" : ""}></td>
+      <td class="mono"><a href="#" onclick="openHost('${esc(r.name)}');return false">${esc(r.name)}</a></td>
+      <td>${r.project ? esc(r.project) + `<div class="muted mono" style="font-size:11px">${esc(r.rule)}</div>` : '<span class="muted">—</span>'}</td>
+      <td>${r.certs}</td><td>${r.certs ? (r.active_cert ? "yes" : '<span class="muted">expired</span>') : ""}</td>
+      <td>${r.co_names ? r.co_names + (r.co_names === 1 ? " name" : " names") : ""}</td>
+      <td class="${dnsCls(r.dns_status)}" title="${esc(r.dns_detail)}">${esc(r.dns_status || "")}</td>
+      <td class="nowrap">${fmtDate(r.first_seen)}</td></tr>`).join("") +
+    (hostRows.length > 3000 ? `<tr><td colspan="8" class="muted">Showing 3000 of ${hostRows.length}. Narrow the filter.</td></tr>` : "");
+  $("#selAll").onchange = e => { hostRows.slice(0, 3000).forEach(r => e.target.checked ? selected.add(r.name) : selected.delete(r.name)); refreshHosts(); };
+  document.querySelectorAll("#hostTable input[data-h]").forEach(cb => cb.onchange = () => { cb.checked ? selected.add(cb.dataset.h) : selected.delete(cb.dataset.h); updSel(); });
+  updSel();
+}
+const updSel = () => $("#selCount").textContent = selected.size ? `${selected.size} selected` : "";
+["#fDomain", "#fProject"].forEach(s => $(s).onchange = refreshHosts);
+let qTimer; $("#fQ").oninput = () => { clearTimeout(qTimer); qTimer = setTimeout(refreshHosts, 250); };
+$("#bulkAssign").onclick = async () => {
+  if (!selected.size) return;
+  await api("/api/hosts/assign", {method: "POST", body: {hosts: [...selected], project_id: Number($("#bulkProject").value) || null}});
+  selected.clear(); refreshHosts();
+};
+$("#bulkIgnore").onclick = async () => { await api("/api/hosts/ignore", {method: "POST", body: {hosts: [...selected], ignored: true}}); selected.clear(); refreshHosts(); };
+$("#bulkUnignore").onclick = async () => { await api("/api/hosts/ignore", {method: "POST", body: {hosts: [...selected], ignored: false}}); selected.clear(); refreshHosts(); };
+
+window.openHost = async name => {
+  const d = $("#drawer");
+  d.innerHTML = `<div class="row" style="justify-content:space-between"><b class="mono">${esc(name)}</b><button class="btn small" onclick="closeDrawer()">Close</button></div><p class="muted">Loading certificates…</p>`;
+  d.classList.add("on");
+  const certs = await api("/api/certs?host=" + encodeURIComponent(name));
+  d.innerHTML = `<div class="row" style="justify-content:space-between"><b class="mono">${esc(name)}</b><button class="btn small" onclick="closeDrawer()">Close</button></div>
+    <p class="muted">${certs.length} certificate(s). Every name on a certificate is visible to anyone who looks at it.</p>` +
+    certs.map(c => `<div class="cert"><div class="row" style="justify-content:space-between;margin:0">
+      <span>${esc(c.issuer || c.source)}</span><span class="${c.active ? "ok" : "muted"}">${c.active ? "valid" : "expired"} ${fmtDate(c.not_before)} → ${fmtDate(c.not_after)}</span></div>
+      ${c.crtsh_id ? `<div><a href="https://crt.sh/?id=${c.crtsh_id}" target="_blank" rel="noopener">crt.sh/?id=${c.crtsh_id}</a></div>` : ""}
+      ${c.provider_shared ? `<div class="muted">Shared CDN/hosting certificate</div>` : ""}
+      <div class="chips">${c.sans.map(s => `<span class="chip" style="${s === name ? "outline:1px solid var(--accent)" : ""}">${esc(s)}</span>`).join("")}</div></div>`).join("");
+};
+window.closeDrawer = () => $("#drawer").classList.remove("on");
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+
+// ---- separation
+async function loadSeparation() {
+  const s = await api("/api/separation");
+  $("#groupList").innerHTML = s.groups.map(g => `<option value="${esc(g)}">`).join("");
+  $("#groupTable").innerHTML = `<tr><th>Project</th><th>Exposure group</th><th>Planned domain</th></tr>` +
+    (s.projects.length ? s.projects.map(p => `<tr><td>${esc(p.name)}</td>
+      <td><input list="groupList" value="${esc(p.exposure_group)}" placeholder="none" onchange="setProj(${p.id}, {exposure_group: this.value})"></td>
+      <td><input value="${esc(p.planned_domain)}" placeholder="not planned" onchange="setProj(${p.id}, {planned_domain: this.value})" class="mono" style="width:100%;min-width:220px"></td></tr>`).join("")
+    : `<tr><td colspan="3" class="muted">Create projects first.</td></tr>`);
+  const opts = s.projects.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+  $("#pairA").innerHTML = opts; $("#pairB").innerHTML = opts;
+  $("#pairList").innerHTML = s.pairs.map(x => `<span class="chip">${esc(x.a)} ≠ ${esc(x.b)}<button onclick="delPair(${x.project_a},${x.project_b})">×</button></span>`).join("") || '<span class="muted">none</span>';
+
+  $("#violations").innerHTML = s.violations.length ? s.violations.map(v => `<details class="finding" open><summary>
+      <span class="sev ${v.cause === "indirect" ? "medium" : v.cause === "same certificate" ? "critical" : "high"}">${esc(v.cause.replace("same ", ""))}</span>
+      <span><b>${esc(v.a)}</b> ↔ <b>${esc(v.b)}</b> <span class="muted">${esc(v.rule)}${v.shared_roots.length ? " · both on " + v.shared_roots.map(esc).join(", ") : ""}${v.shared_certs ? ` · ${v.shared_certs} shared cert(s), ${v.active_shared_certs} valid` : ""}</span></span></summary>
+      <div class="body">${v.path.map(st => `<div class="mono" style="font-size:12px">${esc(st.from)} <span class="muted">→ ${esc(st.how)} →</span> ${esc(st.to)}</div>`).join("")}</div></details>`).join("")
+    : `<p class="muted">${s.groups.length || s.pairs.length ? "None. Every project that must stay apart is unreachable from the others." : "Assign exposure groups above to check separation."}</p>`;
+
+  const P = s.plan;
+  const groupOpts = sel => `<option value="">auto</option>` + s.groups.map(g => `<option ${g === sel ? "selected" : ""}>${esc(g)}</option>`).join("");
+  let html = P.roots.map(r => {
+    const dom = s.domains.find(d => d.name === r.root);
+    return `<div class="row" style="margin-bottom:6px"><span class="mono"><b>${esc(r.root)}</b></span>
+      <span>keeps <b>${esc(r.keep)}</b> <span class="muted">(${esc(r.keep_reason)})</span>, moves <b>${r.moves.map(esc).join(", ")}</b></span>
+      ${dom ? `<span style="flex:1"></span><label class="muted">group that stays <select onchange="setKeep('${esc(r.root)}', this.value)">${groupOpts(dom.keep_group)}</select></label>` : ""}</div>`;
+  }).join("");
+  html += P.moves.map(m => {
+    const grp = m.unit.startsWith("group ") ? m.unit.slice(6) : null;
+    return `<div class="cert" style="margin-top:10px"><div class="row" style="justify-content:space-between;margin:0"><b>Move ${esc(m.unit)}</b><span class="muted">${m.projects.map(esc).join(", ")}</span></div>
+      ${m.leaving.map(l => `<div>Off <span class="mono">${esc(l.root)}</span>: ${l.hosts} hostname(s).
+        ${l.dns_checked ? (l.live.length ? `<span class="bad">${l.live.length} still live, so decommission after cutover:</span><div class="chips">${l.live.map(n => `<span class="chip">${esc(n)}</span>`).join("")}</div>` : '<span class="ok">none still resolve</span>')
+          : '<span class="muted">Run a DNS check to see which still resolve.</span>'}</div>`).join("")}
+      ${m.burned.map(b => `<div style="margin-top:6px"><span class="bad">Burned names:</span> ${b.certs} old certificate(s) show these next to ${esc(b.with)}. Don't reuse them.<div class="chips">${b.names.slice(0, 20).map(n => `<span class="chip">${esc(n)}</span>`).join("")}</div></div>`).join("")}
+      <div style="margin-top:8px">${m.checks.length ? m.checks.map(ch => `<div>New domain <span class="mono">${esc(ch.domain)}</span>
+          <span class="sev ${ch.ok ? "low" : ch.verdict === "linked" ? "critical" : "medium"}" style="background:${ch.ok ? "var(--ok)" : ""}">${esc(ch.verdict)}</span>
+          ${ch.ok ? '<span class="ok">ready</span>' : ch.issues.map(esc).join("; ")}
+          ${ch.verdict === "unchecked" ? `<button class="btn small" onclick="runCand('${esc(ch.domain)}')">Check now</button>` : ""}</div>`).join("")
+        : `<span class="muted">No new domain chosen.</span>`}
+        ${grp ? `<div class="row" style="margin-top:6px"><input id="tgt-${esc(grp)}" placeholder="new domain for group ${esc(grp)}" class="mono"><button class="btn small" onclick="setTarget('${esc(grp)}')">Set for whole group</button></div>` : ""}</div></div>`;
+  }).join("");
+  if (P.remaining.length) html += `<h2 style="margin-top:16px">Still linked after these moves</h2>` + P.remaining.map(v =>
+    `<div style="margin-bottom:6px"><b>${esc(v.a)}</b> ↔ <b>${esc(v.b)}</b> <span class="muted">(${esc(v.cause)})</span>: ${esc(v.fix)}</div>`).join("");
+  $("#plan").innerHTML = html || `<p class="muted">Nothing to rotate: no root domain holds projects that must stay apart.</p>`;
+
+  $("#candTable").innerHTML = s.candidates.length ? `<tr><th>Domain</th><th>Verdict</th><th>Certs</th><th>Checked</th></tr>` + s.candidates.map(c => `<tr>
+    <td class="mono">${esc(c.domain)}</td><td title="${esc(c.detail.notes.join(" "))}"><span class="sev ${c.verdict === "clean" ? "low" : c.verdict === "linked" ? "critical" : "medium"}" style="${c.verdict === "clean" ? "background:var(--ok)" : ""}">${esc(c.verdict)}</span>
+      ${c.detail.linked_names.length ? `<div class="muted" style="font-size:12px">linked via ${c.detail.linked_names.slice(0, 3).map(esc).join(", ")}</div>` : ""}
+      ${c.detail.registered === false ? '<div class="muted" style="font-size:12px">not registered</div>' : ""}</td>
+    <td>${c.detail.certs}</td><td>${fmtDate(c.checked_at)}</td></tr>`).join("") : "";
+  $("#checklist").innerHTML = s.checklist.map(x => `<li style="margin-bottom:4px">${esc(x)}</li>`).join("");
+}
+window.setProj = async (id, body) => { await api(`/api/projects/${id}`, {method: "PATCH", body}); loadSeparation(); };
+window.setKeep = async (root, g) => { await api(`/api/domains/${root}`, {method: "PATCH", body: {keep_group: g}}); loadSeparation(); };
+window.setTarget = async g => { await api("/api/groups/target", {method: "POST", body: {group: g, domain: $(`#tgt-${g}`).value.trim()}}); loadSeparation(); };
+window.delPair = async (a, b) => { await api(`/api/separations/${a}/${b}`, {method: "DELETE"}); loadSeparation(); };
+$("#addPair").onclick = async () => {
+  try { await api("/api/separations", {method: "POST", body: {a: $("#pairA").value, b: $("#pairB").value}}); } catch (e) { alert("Pick two different projects."); }
+  loadSeparation();
+};
+window.runCand = async d => {
+  extra = `Checking ${d} in CT logs. This can take up to a minute.`; renderProgress();
+  try { await api("/api/candidates", {method: "POST", body: {domain: d}}); flash(`Checked ${d}.`, false, 8000); }
+  catch (e) { flash(`Couldn't check ${d}: ${e.message}`, true); }
+  extra = null; renderProgress(); loadSeparation();
+};
+$("#candGo").onclick = () => { const d = $("#candDomain").value.trim(); if (d) runCand(d); };
+
+// ---- activity
+async function loadActivity() {
+  const [ev, sc] = await Promise.all([api("/api/events"), api("/api/scans")]);
+  $("#eventTable").innerHTML = `<tr><th>When</th><th>What</th><th>Domain</th><th>Name</th></tr>` +
+    (ev.length ? ev.map(e => `<tr><td>${esc(e.ts.replace("T", " ").slice(0, 16))}</td><td>${e.kind === "new_host" ? "new host" : "new cert"}</td>
+      <td class="mono">${esc(e.domain)}</td><td class="mono">${esc(e.subject)}</td></tr>`).join("")
+    : `<tr><td colspan="4" class="muted">Nothing new since the first scan of each domain. The first scan is the baseline.</td></tr>`);
+  $("#scanTable").innerHTML = `<tr><th>Started</th><th>Domain</th><th>Status</th><th>Hosts</th><th>New</th><th>Sources</th></tr>` +
+    sc.map(s => `<tr><td>${esc(s.started_at.replace("T", " ").slice(0, 16))}</td><td class="mono">${esc(s.domain)}</td>
+      <td title="${esc(s.error)}">${esc(s.status)}</td><td>${s.hosts_total ?? ""}</td>
+      <td>${s.new_hosts != null ? `+${s.new_hosts} / +${s.new_certs} certs` : ""}</td><td>${esc((JSON.parse(s.sources || "[]")).join(", "))}</td></tr>`).join("");
+}
+
+// ---- progress
+let job = {running: false, current: null, queue: [], recent: [], scans: []};
+let seenRecent = null, notes = [], extra = null, pollTimer = null;
+const elapsed = iso => { if (!iso) return ""; const t = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
+// Scan results stay until dismissed (last 5); short confirmations pass a ttl in ms.
+function flash(text, bad = false, ttl = null) { notes = [...notes, {text, bad, at: Date.now(), ttl}].slice(-5); renderProgress(); }
+function describe(r) {
+  if (r.kind === "dns") return r.status === "failed" ? {bad: true, text: `DNS check failed: ${r.error}`} :
+    {text: `DNS check done in ${r.seconds}s: ${Object.entries(r.counts).map(([k, v]) => `${v} ${k}`).join(", ")}.`};
+  if (r.status === "failed") return {bad: true, text: `Scan of ${r.domain} failed after ${r.seconds}s: ${r.error}`};
+  const errs = r.errors && Object.keys(r.errors).length ? ` (${Object.keys(r.errors).join(", ")} failed, used fallbacks)` : "";
+  return {text: `Scanned ${r.domain} in ${r.seconds}s: ${r.hosts_total} hosts, ${r.certs} certificates` +
+    (r.baseline ? " (first scan, saved as the baseline)" : `, ${r.new_hosts} new hosts, ${r.new_certs} new certs`) + errs + "."};
+}
+function renderProgress() {
+  const el = $("#progress");
+  notes = notes.filter(n => !n.ttl || Date.now() - n.at < n.ttl);
+  const parts = [];
+  if (job.running || extra) {
+    const lines = [];
+    if (extra) lines.push(`<span class="spin"></span> ${esc(extra)}`);
+    if (job.current === "dns") lines.push(`<span class="spin"></span> <b>Resolving hostnames</b> <span class="muted">${elapsed(job.current_started)}</span>`);
+    for (const sc of job.scans) lines.push(`<span class="spin"></span> <b>Scanning ${esc(sc.domain)}</b> <span>${esc(sc.stage || "starting")}</span> <span class="muted">${elapsed(sc.started_at)} elapsed</span>`);
+    if (job.current && job.current !== "dns" && !job.scans.some(s => s.domain === job.current)) lines.push(`<span class="spin"></span> <b>Scanning ${esc(job.current)}</b> <span>starting</span>`);
+    if (job.queue.length) lines.push(`<span class="muted">Queued: ${job.queue.slice(0, 6).map(q => q === "dns" ? "DNS check" : esc(q)).join(", ")}${job.queue.length > 6 ? ` and ${job.queue.length - 6} more` : ""}</span>`);
+    parts.push(lines.map(l => `<div class="line">${l}</div>`).join("") + `<div class="bar"><i></i></div>`);
+  }
+  if (notes.length) parts.push(notes.map(n => `<div class="line ${n.bad ? "fail" : "done"}" style="margin-top:${parts.length ? 6 : 0}px">${n.bad ? "✕" : "✓"} ${esc(n.text)}
+    <button class="btn small" onclick="notes=[];renderProgress()">Dismiss</button></div>`).join(""));
+  el.innerHTML = parts.join("");
+  el.classList.toggle("on", parts.length > 0);
+}
+setInterval(renderProgress, 1000);  // ticks the elapsed timers and expires old messages
+
+async function pollJob(soon = false) {
+  clearTimeout(pollTimer);
+  const was = job.running;
+  try { job = await api("/api/jobs"); } catch (e) { pollTimer = setTimeout(pollJob, 5000); return; }
+  const fresh = seenRecent === null ? [] : job.recent.filter(r => !seenRecent.has(r.finished_at + (r.domain || r.kind)));
+  seenRecent = new Set(job.recent.map(r => r.finished_at + (r.domain || r.kind)));
+  fresh.forEach(r => { const d = describe(r); flash(d.text, d.bad); });
+  renderProgress();
+  const tab = document.querySelector("#nav button.on").dataset.tab;
+  if (fresh.length || (was && !job.running)) show(tab);            // new results: refresh the view
+  else if (tab === "domains" && (job.running || soon)) loadDomains(); // keep per-row status current
+  pollTimer = setTimeout(pollJob, job.running || soon ? 1500 : 8000);
+}
+
+const TABS = ["overview", "domains", "projects", "hosts", "separation", "activity"];
+let startTab = "overview";
+try { startTab = localStorage.getItem("crtwatch.tab") || "overview"; } catch (e) {}
+if (TABS.includes(location.hash.slice(1))) startTab = location.hash.slice(1);  // links like /#separation
+show(startTab);
+pollJob();
+</script>
+</body>
+</html>

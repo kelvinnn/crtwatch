@@ -1,0 +1,6 @@
+include README.md CHANGELOG.md LICENSE Dockerfile docker-compose.yml .dockerignore .env.example mapping.example.csv
+recursive-include docs *.md *.png
+recursive-include tests *.py
+recursive-include crtwatch/static *
+prune data
+global-exclude *.db *.db-* *.pyc __pycache__

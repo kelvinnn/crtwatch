@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crtwatch"
+dynamic = ["version"]
+description = "Find which of your projects give each other away through Certificate Transparency, and plan domain rotations to separate them."
+readme = "README.md"
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "dnspython>=2.6",
+    "tldextract>=5.3",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "certifi>=2024.0",
+]
+keywords = ["certificate transparency", "crt.sh", "attack surface", "subdomains", "security"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Environment :: Web Environment",
+    "Topic :: Security",
+]
+
+[project.scripts]
+crtwatch = "crtwatch.cli:main"
+
+[tool.setuptools]
+packages = ["crtwatch"]
+
+[tool.setuptools.dynamic]
+version = { attr = "crtwatch.__version__" }
+
+[tool.setuptools.package-data]
+crtwatch = ["static/*"]

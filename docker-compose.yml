@@ -1,0 +1,14 @@
+services:
+  crtwatch:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"   # localhost only; put a reverse proxy with TLS in front to expose it
+    volumes:
+      - ./data:/data
+    environment:
+      CRTWATCH_PASSWORD: ${CRTWATCH_PASSWORD:?set CRTWATCH_PASSWORD in .env}
+      CRTWATCH_DNS: "1"                                  # resolve hosts after each scheduled scan
+      CRTWATCH_WEBHOOK_URL: ${CRTWATCH_WEBHOOK_URL:-}    # Slack/Discord incoming webhook for new names
+      CRTWATCH_WEBHOOK_FORMAT: ${CRTWATCH_WEBHOOK_FORMAT:-slack}
+      CERTSPOTTER_API_KEY: ${CERTSPOTTER_API_KEY:-}
