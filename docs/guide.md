@@ -83,13 +83,14 @@ Every command accepts the global options `--db PATH` (which database file to use
 |---|---|
 | `crtwatch scan [DOMAIN...] [--dns] [--every-source] [--workers N]` | Scan the given domains, or all enabled ones. Domains not yet in the inventory are added. `--dns` resolves every host afterwards. `--every-source` queries all certificate sources instead of stopping at the first that works. `--workers` sets how many domains run in parallel (default 2; crt.sh doesn't like more). |
 | `crtwatch dns [DOMAIN...]` | Resolve hosts: `live`, `nxdomain`, `no_address`, `dangling` (CNAME to a target that doesn't exist) or `error`. |
+| `crtwatch probe [DOMAIN...] [--host NAME]... [--include-dead] [--allow-private] [--workers N]` | **HTTP check (active).** Visit each host (`https://` first, then `http://`) and record the status code, redirect chain, title, server, certificate problems and a text preview. By default it skips wildcards, ignored hosts, names DNS says don't exist (`--include-dead` tries them anyway) and hosts that resolve only to private or internal addresses (`--allow-private` visits them). 16 hosts are checked in parallel. |
 | `crtwatch events [--limit N]` | New hosts and certificates found since each domain's baseline. |
 
 ### Analysis
 
 | Command | What it does |
 |---|---|
-| `crtwatch hosts [--domain D] [--project P] [--unassigned] [-q TEXT] [--csv]` | List hosts. `--csv` produces a spreadsheet-friendly export. |
+| `crtwatch hosts [--domain D] [--project P] [--unassigned] [-q TEXT] [--http CLASS] [--csv]` | List hosts. `--http` filters by HTTP result: `2xx`, `3xx`, `4xx`, `5xx`, `down`, `skipped` or `unprobed`. `--csv` produces a spreadsheet-friendly export, including HTTP status and title. |
 | `crtwatch report [--min-severity LEVEL] [--json]` | All findings, from critical down to info. |
 | `crtwatch exposure [PROJECT]` | Blast radius for each project. |
 
@@ -111,8 +112,8 @@ Every command accepts the global options `--db PATH` (which database file to use
 
 | Command | What it does |
 |---|---|
-| `crtwatch serve [--host H] [--port P] [--every INTERVAL]` | Dashboard on 127.0.0.1:8080 by default. `--every 6h` also rescans in the background. Each tab has its own link, e.g. `http://127.0.0.1:8080/#separation`. |
-| `crtwatch monitor [--every 6h] [--dns] [--workers N]` | Rescan forever without the dashboard. |
+| `crtwatch serve [--host H] [--port P] [--every INTERVAL]` | Dashboard on 127.0.0.1:8080 by default. `--every 6h` also rescans in the background. Each tab has its own link, e.g. `http://127.0.0.1:8080/#separation`, and `/#host=NAME` opens one host's details. |
+| `crtwatch monitor [--every 6h] [--dns] [--probe] [--workers N]` | Rescan forever without the dashboard. `--dns` and `--probe` also re-run the DNS and HTTP checks each round. |
 | `crtwatch --db demo.db demo` | Load the made-up *Acme* company into an empty database, to explore crtwatch without scanning. It refuses to touch a database that already has domains. |
 
 Intervals accept `s`, `m`, `h` or `d`, e.g. `30m`, `6h` or `1d`.
@@ -143,6 +144,7 @@ After a domain's baseline, every scan records:
 
 - `new_host`: a hostname under one of your domains appeared for the first time.
 - `new_cert`: a certificate not seen before, with all its names.
+- `http_change`: a re-run HTTP check found a different result class for a host than last time, e.g. `404` → `200`, or `200` → `timeout`.
 
 These appear in the Activity tab and in `crtwatch events`. To get them as messages, set a webhook:
 
@@ -168,6 +170,8 @@ All settings are environment variables. None are required.
 | `CRTWATCH_USER` | any | Also require this username for basic auth. |
 | `CRTWATCH_ALLOW_NO_AUTH` | none | Set to `1` to listen on a public address without a password. Not recommended. |
 | `CRTWATCH_DNS` | none | Set to `1` to run a DNS check after every dashboard or scheduled scan. |
+| `CRTWATCH_PROBE` | none | Set to `1` to run the HTTP check after every dashboard or scheduled scan (after the DNS check, if both are on). |
+| `CRTWATCH_PROBE_PRIVATE` | none | Set to `1` to let the HTTP check visit hosts on private or internal addresses. Same as `probe --allow-private`. |
 | `CRTWATCH_RESOLVERS` | `1.1.1.1,8.8.8.8` | DNS resolvers for the DNS check and candidate vetting. |
 | `CRTWATCH_WEBHOOK_URL`, `CRTWATCH_WEBHOOK_FORMAT` | none, `slack` | See [Monitoring and alerts](#monitoring-and-alerts). |
 | `CERTSPOTTER_API_KEY` | none | Lifts CertSpotter's keyless rate limit. Only used when crt.sh is unavailable. |
@@ -187,8 +191,11 @@ The dashboard is a thin layer over a JSON API on the same port. When `CRTWATCH_P
 | `POST /api/domains` | Add domains. Body: `{"names": "a.com\nb.com", "scan": true}`. |
 | `PATCH /api/domains/{name}` | Change `enabled`, `notes` or `keep_group`. |
 | `DELETE /api/domains/{name}` | Remove a domain. |
-| `POST /api/scan` | Queue scans. Body: `{"domains": [...], "dns": false}`; no domains = all enabled. |
+| `POST /api/scan` | Queue scans. Body: `{"domains": [...], "dns": false, "http": false}`; no domains = all enabled. |
 | `POST /api/dns` | Queue a DNS check. |
+| `POST /api/probe` | Queue an HTTP check of all eligible hosts. |
+| `POST /api/probe/host?host=NAME` | Check one host now and return the result. |
+| `GET /api/probe?host=NAME` | Latest HTTP result for a host: status, final status, redirect chain, title, server, TLS problem, snippet and preview HTML. |
 | `GET /api/jobs` | Queue, current job, running scans with their current step, and recent results. |
 | `GET /api/scans` | Scan history. |
 | `GET /api/projects` | List projects. |
@@ -197,7 +204,7 @@ The dashboard is a thin layer over a JSON API on the same port. When `CRTWATCH_P
 | `DELETE /api/projects/{id}` | Delete a project. |
 | `POST /api/projects/{id}/rules` | Add patterns. Body: `{"patterns": "a\nb"}`. |
 | `DELETE /api/rules/{id}` | Remove a pattern. |
-| `GET /api/hosts?domain=&project=&q=` | List hosts. Use `project=(unassigned)` for unmapped hosts. |
+| `GET /api/hosts?domain=&project=&q=&http=` | List hosts, each with a summary of its last HTTP result. Use `project=(unassigned)` for unmapped hosts, and `http=2xx` (etc.) to filter. |
 | `POST /api/hosts/assign` | Assign hosts. Body: `{"hosts": [...], "project_id": 3}`; `null` unassigns. |
 | `POST /api/hosts/ignore` | Ignore hosts. Body: `{"hosts": [...], "ignored": true}`. |
 | `GET /api/certs?host=` | Certificates for a host, with all their names. |
@@ -219,6 +226,10 @@ The dashboard is a thin layer over a JSON API on the same port. When `CRTWATCH_P
 **`refusing to listen on a public interface`.** Set `CRTWATCH_PASSWORD`, or keep the default `--host 127.0.0.1`.
 
 **Everything is unassigned.** Patterns match whole hostnames. `shop.acme.com` doesn't match `www.shop.acme.com`; add `*.shop.acme.com` as well.
+
+**The HTTP check shows `skipped`.** The host resolves only to private or internal addresses. Use `crtwatch probe --allow-private` (or `CRTWATCH_PROBE_PRIVATE=1`) if you're on that network and want them checked.
+
+**The HTTP check is slow.** Unreachable hosts wait for an 8-second timeout. Run a DNS check first: the HTTP check then skips names that don't exist.
 
 **A vendor's names show up as findings.** Shared CDN and hosting certificates (Cloudflare and others) are recognised and left out of the "domains you haven't added" list. If one still gets through, ignore those hosts.
 

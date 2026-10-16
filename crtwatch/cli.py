@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from . import __version__, analyze, db, dnscheck, scan, separation
+from . import __version__, analyze, db, dnscheck, probe, scan, separation
 
 SEV_MARK = {"critical": "CRIT", "high": "HIGH", "medium": "MED ", "low": "LOW ", "info": "INFO"}
 
@@ -124,6 +124,26 @@ def cmd_dns(a):
     print(dnscheck.check_hosts(names))
 
 
+def cmd_probe(a):
+    if a.allow_private:
+        probe.ALLOW_PRIVATE = True
+    names = None
+    with db.session() as c:
+        if a.hosts:
+            names = [h.lower() for h in a.hosts]
+        elif a.domains:
+            q = ("SELECT h.name FROM hosts h JOIN domains d ON d.id=h.domain_id WHERE h.ignored=0 AND d.name IN (%s)"
+                 % ",".join("?" * len(a.domains)))
+            names = [r["name"] for r in c.execute(q, [db.normalize_domain(d) for d in a.domains])
+                     if a.include_dead or not _dead(c, r["name"])]
+    print("http:", probe.probe_hosts(names, workers=a.workers, include_dead=a.include_dead))
+
+
+def _dead(c, host):
+    r = c.execute("SELECT dns_status FROM hosts WHERE name=?", (host,)).fetchone()
+    return r and r["dns_status"] in ("nxdomain", "no_address")
+
+
 def cmd_report(a):
     s = analyze.summary()
     if a.json:
@@ -164,17 +184,31 @@ def cmd_exposure(a):
 
 def cmd_hosts(a):
     inv = analyze.Inventory()
-    rows = analyze.host_rows(inv, domain=a.domain, project="(unassigned)" if a.unassigned else a.project, q=a.q)
+    rows = analyze.host_rows(inv, domain=a.domain, project="(unassigned)" if a.unassigned else a.project, q=a.q, http=a.http)
     if a.csv:
         w = csv.writer(sys.stdout)
-        w.writerow(["name", "root", "project", "rule", "certs", "active_cert", "first_seen", "dns_status", "dns_detail", "ignored"])
+        w.writerow(["name", "root", "project", "rule", "certs", "active_cert", "first_seen", "dns_status", "dns_detail",
+                    "http_status", "http_title", "http_error", "ignored"])
         for r in rows:
+            hp = r["http"] or {}
             w.writerow([r["name"], r["root"], r["project"] or "", r["rule"] or "", r["certs"], r["active_cert"],
-                        r["first_seen"], r["dns_status"] or "", r["dns_detail"] or "", r["ignored"]])
+                        r["first_seen"], r["dns_status"] or "", r["dns_detail"] or "", hp.get("status") or "",
+                        hp.get("title") or "", hp.get("error") or "", r["ignored"]])
         return
     for r in rows:
         print(f"{r['name']:55} {r['project'] or '-':20} certs={r['certs']:<4} {'valid' if r['active_cert'] else 'expired':7} "
-              f"{r['dns_status'] or ''}{' (ignored)' if r['ignored'] else ''}")
+              f"{r['dns_status'] or '':9} {_http_label(r['http'])}{' (ignored)' if r['ignored'] else ''}")
+
+
+def _http_label(hp):
+    if not hp:
+        return ""
+    if hp["status"] is None:
+        return hp["error"] or "no response"
+    label = f"{hp['status']} {hp['title'] or ''}".strip()
+    if hp["redirects_to"]:
+        label += f" -> {hp['redirects_to'][0]}"
+    return label[:70]
 
 
 def cmd_assign(a):
@@ -329,6 +363,8 @@ def cmd_monitor(a):
             logging.info("%s %s +%s hosts +%s certs", r["domain"], r["status"], r.get("new_hosts"), r.get("new_certs"))
         if a.dns:
             logging.info("dns %s", dnscheck.check_hosts())
+        if a.probe:
+            logging.info("http %s", probe.probe_hosts())
         time.sleep(every)
 
 
@@ -392,6 +428,14 @@ def main(argv=None):
     p.add_argument("domains", nargs="*")
     p.set_defaults(fn=cmd_dns)
 
+    p = sub.add_parser("probe", help="visit each host over HTTPS/HTTP and record status, title and a preview (active!)")
+    p.add_argument("domains", nargs="*", help="only hosts under these domains")
+    p.add_argument("--host", dest="hosts", action="append", help="probe just this hostname (repeatable)")
+    p.add_argument("--include-dead", action="store_true", help="also try hosts DNS says don't exist")
+    p.add_argument("--allow-private", action="store_true", help="also visit hosts on private/internal addresses")
+    p.add_argument("--workers", type=int, default=16)
+    p.set_defaults(fn=cmd_probe)
+
     p = sub.add_parser("report", help="findings")
     p.add_argument("--json", action="store_true")
     p.add_argument("--min-severity", default="info", choices=list(analyze.SEV_ORDER))
@@ -407,6 +451,7 @@ def main(argv=None):
     p.add_argument("--unassigned", action="store_true")
     p.add_argument("-q")
     p.add_argument("--csv", action="store_true")
+    p.add_argument("--http", choices=["2xx", "3xx", "4xx", "5xx", "down", "skipped", "unprobed"], help="filter by HTTP result")
     p.set_defaults(fn=cmd_hosts)
 
     p = sub.add_parser("assign", help="assign exact hostnames to a project")
@@ -461,6 +506,7 @@ def main(argv=None):
     p = sub.add_parser("monitor", help="rescan forever on an interval")
     p.add_argument("--every", default="6h")
     p.add_argument("--dns", action="store_true")
+    p.add_argument("--probe", action="store_true", help="run the HTTP check after each round")
     p.add_argument("--workers", type=int, default=2)
     p.set_defaults(fn=cmd_monitor)
 

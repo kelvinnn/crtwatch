@@ -6,12 +6,13 @@
 <title>crtwatch</title>
 <style>
 :root {
+  --blue: #2f6fd0;
   --bg: #f6f7f9; --panel: #fff; --ink: #1b1f24; --muted: #646d78; --line: #e2e5ea; --accent: #2457d6;
   --crit: #b4232c; --high: #d9622b; --med: #b98900; --low: #5a7184; --info: #6b7280; --ok: #1f8a4c; --chip: #eef1f5;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #111418; --panel: #181c21; --ink: #e5e8ec; --muted: #9aa3ad; --line: #2a3038; --accent: #6e9bff;
-          --crit: #ff6b73; --high: #ff9a5c; --med: #e8c14d; --low: #93a8bb; --info: #9aa3ad; --ok: #4cc983; --chip: #232931; }
+          --crit: #ff6b73; --high: #ff9a5c; --med: #e8c14d; --low: #93a8bb; --info: #9aa3ad; --ok: #4cc983; --chip: #232931; --blue: #6e9bff; }
 }
 * { box-sizing: border-box; }
 html, body { overflow-x: clip; }
@@ -58,9 +59,21 @@ table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { color: var(--muted); font-weight: 600; font-size: 12px; background: var(--panel); }
 .tablebox { max-height: calc(100vh - 230px); min-height: 200px; overflow: auto; }
-.tablebox table { border-collapse: separate; border-spacing: 0; min-width: 760px; }  /* collapsed borders let rows bleed past sticky headers */
+.tablebox table { border-collapse: separate; border-spacing: 0; min-width: 900px; }  /* collapsed borders let rows bleed past sticky headers */
 .tablebox th { position: sticky; top: 0; z-index: 1; }
 .nowrap { white-space: nowrap; }
+/* HTTP status pills: colour by class, readable without colour too (the code is always shown) */
+.pill { display: inline-flex; align-items: center; gap: 5px; font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill.s2 { color: var(--ok); } .pill.s3 { color: var(--blue); } .pill.s4 { color: var(--med); } .pill.s5 { color: var(--crit); }
+.pill.down, .pill.skipped { color: var(--muted); font-weight: 500; }
+.pill.big { font-size: 15px; padding: 3px 12px; }
+.httpcell .t { display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; font-size: 13px; margin: 10px 0; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; word-break: break-word; }
+.snippet { background: var(--chip); border-radius: 6px; padding: 10px; font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; max-height: 180px; overflow: auto; }
+.preview { width: 100%; height: 380px; border: 1px solid var(--line); border-radius: 6px; background: #fff; margin-top: 8px; }
+.chain { font-size: 12px; margin: 6px 0; } .chain div { margin: 2px 0; }
 td.mono, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
 tr.ignored td { opacity: .45; }
 input, select, textarea, button.btn { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
@@ -115,8 +128,10 @@ button.btn.small { padding: 2px 8px; font-size: 12px; } button.btn.danger { colo
       <div class="row"><h2 style="margin:0">Inventory</h2>
         <span style="flex:1"></span>
         <label><input type="checkbox" id="scanDns"> resolve DNS after</label>
+        <label title="Visits every host. This is the only check that connects to your servers."><input type="checkbox" id="scanHttp"> check HTTP after</label>
         <button class="btn" id="scanAll">Scan all</button>
-        <button class="btn" id="dnsAll">DNS check</button></div>
+        <button class="btn" id="dnsAll">DNS check</button>
+        <button class="btn" id="httpAll" title="Visit every live host over HTTPS/HTTP and record what answers">HTTP check</button></div>
       <div class="scroll"><table id="domainTable"></table></div>
     </div>
   </section>
@@ -137,6 +152,7 @@ button.btn.small { padding: 2px 8px; font-size: 12px; } button.btn.danger { colo
         <div class="row" style="margin:0">
           <select id="fDomain"><option value="">all domains</option></select>
           <select id="fProject"><option value="">all projects</option></select>
+          <select id="fHttp"><option value="">any HTTP result</option><option value="2xx">2xx success</option><option value="3xx">3xx redirect</option><option value="4xx">4xx client error</option><option value="5xx">5xx server error</option><option value="down">no response</option><option value="skipped">skipped (private address)</option><option value="unprobed">not checked</option></select>
           <input id="fQ" placeholder="filter by name">
         </div>
         <div class="row" style="margin:0">
@@ -199,7 +215,7 @@ function show(tab) {
   document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
   document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === tab));
   try { localStorage.setItem("crtwatch.tab", tab); } catch (e) {}
-  if (location.hash !== "#" + tab) history.replaceState(null, "", "#" + tab);
+  if (location.hash !== "#" + tab && !location.hash.startsWith("#host=")) history.replaceState(null, "", "#" + tab);
   ({overview: loadOverview, domains: loadDomains, projects: loadProjects, hosts: loadHosts, activity: loadActivity, separation: loadSeparation})[tab]();
 }
 
@@ -210,7 +226,8 @@ async function loadOverview() {
   $("#tiles").innerHTML = [
     ["Domains", c.domains], ["Projects", c.projects], ["Hosts", c.hosts], ["Unassigned", c.unassigned],
     ["Certificates", c.certs], ["Critical / High", `${f.critical} / ${f.high}`],
-    ["Separation violations", c.grouped_projects ? c.violations : "set groups"]
+    ["Separation violations", c.grouped_projects ? c.violations : "set groups"],
+    ["Answering 2xx", c.http.unprobed === c.hosts ? "not checked" : `${c.http["2xx"]} / ${c.hosts - c.http.unprobed}`]
   ].map(([k, v]) => `<div class="tile"><b>${esc(v)}</b><span>${k}</span></div>`).join("");
   $("#findings").innerHTML = s.findings.length ? s.findings.map(renderFinding).join("") :
     `<p class="muted">No findings yet. Add domains, scan them, then map hosts to projects.</p>`;
@@ -264,9 +281,10 @@ $("#addDomains").onclick = async () => {
 };
 $("#scanAll").onclick = () => startScan(null);
 $("#dnsAll").onclick = async () => { await api("/api/dns", {method: "POST"}); pollJob(true); };
+$("#httpAll").onclick = async () => { await api("/api/probe", {method: "POST"}); pollJob(true); };
 window.scanOne = name => startScan([name]);
 async function startScan(domains) {
-  await api("/api/scan", {method: "POST", body: {domains, dns: $("#scanDns").checked}});
+  await api("/api/scan", {method: "POST", body: {domains, dns: $("#scanDns").checked, http: $("#scanHttp").checked}});
   pollJob(true);
 }
 window.toggleDomain = async (n, en) => { await api(`/api/domains/${n}`, {method: "PATCH", body: {enabled: !!en}}); loadDomains(); };
@@ -308,10 +326,11 @@ async function refreshHosts() {
   if ($("#fDomain").value) qs.set("domain", $("#fDomain").value);
   if ($("#fProject").value) qs.set("project", $("#fProject").value);
   if ($("#fQ").value) qs.set("q", $("#fQ").value);
+  if ($("#fHttp").value) qs.set("http", $("#fHttp").value);
   hostRows = await api("/api/hosts?" + qs);
   selected = new Set([...selected].filter(n => hostRows.some(r => r.name === n)));
   const dnsCls = s => s === "live" ? "ok" : s === "dangling" ? "bad" : "muted";
-  $("#hostTable").innerHTML = `<tr><th><input type="checkbox" id="selAll"></th><th>Host</th><th>Project</th><th>Certs</th><th>Valid cert</th><th>Shares cert with</th><th>DNS</th><th class="nowrap">First seen</th></tr>` +
+  $("#hostTable").innerHTML = `<tr><th><input type="checkbox" id="selAll"></th><th>Host</th><th>Project</th><th>Certs</th><th>Valid cert</th><th>Shares cert with</th><th>DNS</th><th>HTTP</th><th class="nowrap">First seen</th></tr>` +
     hostRows.slice(0, 3000).map(r => `<tr class="${r.ignored ? "ignored" : ""}">
       <td><input type="checkbox" data-h="${esc(r.name)}" ${selected.has(r.name) ? "checked" : ""}></td>
       <td class="mono"><a href="#" onclick="openHost('${esc(r.name)}');return false">${esc(r.name)}</a></td>
@@ -319,14 +338,34 @@ async function refreshHosts() {
       <td>${r.certs}</td><td>${r.certs ? (r.active_cert ? "yes" : '<span class="muted">expired</span>') : ""}</td>
       <td>${r.co_names ? r.co_names + (r.co_names === 1 ? " name" : " names") : ""}</td>
       <td class="${dnsCls(r.dns_status)}" title="${esc(r.dns_detail)}">${esc(r.dns_status || "")}</td>
+      <td class="httpcell">${httpCell(r)}</td>
       <td class="nowrap">${fmtDate(r.first_seen)}</td></tr>`).join("") +
-    (hostRows.length > 3000 ? `<tr><td colspan="8" class="muted">Showing 3000 of ${hostRows.length}. Narrow the filter.</td></tr>` : "");
+    (hostRows.length > 3000 ? `<tr><td colspan="9" class="muted">Showing 3000 of ${hostRows.length}. Narrow the filter.</td></tr>` : "");
   $("#selAll").onchange = e => { hostRows.slice(0, 3000).forEach(r => e.target.checked ? selected.add(r.name) : selected.delete(r.name)); refreshHosts(); };
   document.querySelectorAll("#hostTable input[data-h]").forEach(cb => cb.onchange = () => { cb.checked ? selected.add(cb.dataset.h) : selected.delete(cb.dataset.h); updSel(); });
   updSel();
 }
+// ---- HTTP status display
+const httpCls = c => ({"2xx": "s2", "3xx": "s3", "4xx": "s4", "5xx": "s5"})[c] || c;
+function httpPill(h, big = false) {
+  if (!h) return "";
+  const label = h.status != null ? `${h.status}${big && h.reason ? " " + esc(h.reason) : ""}` : (h.class === "skipped" ? "skipped" : esc(shortErr(h.error)));
+  return `<span class="pill ${httpCls(h.class)}${big ? " big" : ""}" title="${esc(h.error || h.reason || "")}">${label}</span>`;
+}
+const shortErr = e => !e ? "no response" : e.startsWith("DNS") ? "no DNS" : e.startsWith("TLS") ? "TLS error" : e.length > 18 ? "no response" : e;
+function httpCell(r) {
+  const h = r.http;
+  if (!h) return "";
+  let sub = "";
+  if (h.redirects_to) sub = `→ ${esc(h.redirects_to[0])}${h.final_status && h.final_status !== h.status ? ` (${h.final_status})` : ""}`;
+  else if (h.title) sub = esc(h.title);
+  else if (h.tls_error) sub = "certificate problem";
+  return httpPill(h) + (h.tls_error && h.status != null ? ` <span class="bad" title="${esc(h.tls_error)}">⚠︎</span>` : "") +
+    (sub ? `<span class="t" title="${sub}">${sub}</span>` : "");
+}
+
 const updSel = () => $("#selCount").textContent = selected.size ? `${selected.size} selected` : "";
-["#fDomain", "#fProject"].forEach(s => $(s).onchange = refreshHosts);
+["#fDomain", "#fProject", "#fHttp"].forEach(s => $(s).onchange = refreshHosts);
 let qTimer; $("#fQ").oninput = () => { clearTimeout(qTimer); qTimer = setTimeout(refreshHosts, 250); };
 $("#bulkAssign").onclick = async () => {
   if (!selected.size) return;
@@ -336,12 +375,54 @@ $("#bulkAssign").onclick = async () => {
 $("#bulkIgnore").onclick = async () => { await api("/api/hosts/ignore", {method: "POST", body: {hosts: [...selected], ignored: true}}); selected.clear(); refreshHosts(); };
 $("#bulkUnignore").onclick = async () => { await api("/api/hosts/ignore", {method: "POST", body: {hosts: [...selected], ignored: false}}); selected.clear(); refreshHosts(); };
 
+let previewHtml = null;
+function httpCard(name, p) {
+  if (!p) return `<div class="cert"><b>HTTP</b> <span class="muted">not checked yet</span>
+    <button class="btn small" style="float:right" onclick="probeOne('${esc(name)}')">Check now</button>
+    <div class="muted" style="font-size:12px;margin-top:4px">Visits https://${esc(name)}/ (then http) and records what answers.</div></div>`;
+  const kv = [];
+  if (p.final_url) kv.push(["URL", `<a href="${esc(p.final_url)}" target="_blank" rel="noopener noreferrer">${esc(p.final_url)}</a>`]);
+  if (p.title) kv.push(["Title", esc(p.title)]);
+  if (p.server) kv.push(["Server", esc(p.server)]);
+  if (p.content_type) kv.push(["Type", esc(p.content_type) + (p.length != null ? ` · ${(p.length / 1024).toFixed(1)} KB read` : "")]);
+  if (p.status != null) kv.push(["Certificate", p.scheme === "http" ? '<span class="muted">plain HTTP, no TLS</span>' : p.tls_error ? `<span class="bad">${esc(p.tls_error)}</span>` : '<span class="ok">valid</span>']);
+  if (p.error) kv.push(["Error", esc(p.error)]);
+  kv.push(["Checked", esc(p.checked_at.replace("T", " ").slice(0, 16))]);
+  const fcls = p.final_status != null ? `s${Math.floor(p.final_status / 100)}` : "down";
+  const chain = p.redirects.length ? `<div class="chain">${p.redirects.map(r => `<div><span class="pill s3">${r.status}</span> <span class="mono">${esc(r.from)}</span><br><span class="muted">→</span> <span class="mono">${esc(r.to)}</span></div>`).join("")}
+    <div>ends at <span class="pill ${fcls}">${p.final_status ?? "?"}</span></div></div>` : "";
+  previewHtml = p.html;
+  const body = (p.final_status ?? 0) >= 200 && (p.final_status ?? 0) < 300 ? `${p.snippet ? `<div class="snippet">${esc(p.snippet)}</div>` : '<div class="muted">Empty page.</div>'}
+    ${p.html ? `<button class="btn small" style="margin-top:8px" onclick="showPreview(this)">Show rendered preview</button>
+      <span class="muted" style="font-size:12px">scripts and network requests blocked</span>` : ""}` : (p.snippet ? `<div class="snippet">${esc(p.snippet)}</div>` : "");
+  return `<div class="cert"><div class="row" style="justify-content:space-between;margin:0"><b>HTTP</b>
+      <span>${httpPill(p, true)} <button class="btn small" onclick="probeOne('${esc(name)}')">Recheck</button></span></div>
+    ${chain}<dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>${body}</div>`;
+}
+window.showPreview = btn => {
+  // Rendered without scripts (sandbox) and without any network access (CSP): nothing is fetched from the site.
+  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:">`;
+  const f = document.createElement("iframe");
+  f.className = "preview"; f.setAttribute("sandbox", ""); f.setAttribute("referrerpolicy", "no-referrer");
+  f.srcdoc = csp + (previewHtml || "");
+  btn.replaceWith(f);
+};
+window.probeOne = async name => {
+  extra = `Checking ${name} over HTTP…`; renderProgress();
+  try { await api("/api/probe/host?host=" + encodeURIComponent(name), {method: "POST"}); }
+  catch (e) { flash(`Couldn't check ${name}: ${e.message}`, true); }
+  extra = null; renderProgress(); openHost(name);
+  if (document.querySelector("#nav button.on").dataset.tab === "hosts") refreshHosts();
+};
+
 window.openHost = async name => {
   const d = $("#drawer");
-  d.innerHTML = `<div class="row" style="justify-content:space-between"><b class="mono">${esc(name)}</b><button class="btn small" onclick="closeDrawer()">Close</button></div><p class="muted">Loading certificates…</p>`;
+  d.innerHTML = `<div class="row" style="justify-content:space-between"><b class="mono">${esc(name)}</b><button class="btn small" onclick="closeDrawer()">Close</button></div><p class="muted">Loading…</p>`;
   d.classList.add("on");
-  const certs = await api("/api/certs?host=" + encodeURIComponent(name));
+  const [certs, probe] = await Promise.all([api("/api/certs?host=" + encodeURIComponent(name)),
+    fetch("/api/probe?host=" + encodeURIComponent(name)).then(r => r.ok ? r.json() : null)]);
   d.innerHTML = `<div class="row" style="justify-content:space-between"><b class="mono">${esc(name)}</b><button class="btn small" onclick="closeDrawer()">Close</button></div>
+    ${name.startsWith("*.") ? "" : httpCard(name, probe)}
     <p class="muted">${certs.length} certificate(s). Every name on a certificate is visible to anyone who looks at it.</p>` +
     certs.map(c => `<div class="cert"><div class="row" style="justify-content:space-between;margin:0">
       <span>${esc(c.issuer || c.source)}</span><span class="${c.active ? "ok" : "muted"}">${c.active ? "valid" : "expired"} ${fmtDate(c.not_before)} → ${fmtDate(c.not_after)}</span></div>
@@ -424,7 +505,7 @@ $("#candGo").onclick = () => { const d = $("#candDomain").value.trim(); if (d) r
 async function loadActivity() {
   const [ev, sc] = await Promise.all([api("/api/events"), api("/api/scans")]);
   $("#eventTable").innerHTML = `<tr><th>When</th><th>What</th><th>Domain</th><th>Name</th></tr>` +
-    (ev.length ? ev.map(e => `<tr><td>${esc(e.ts.replace("T", " ").slice(0, 16))}</td><td>${e.kind === "new_host" ? "new host" : "new cert"}</td>
+    (ev.length ? ev.map(e => `<tr><td>${esc(e.ts.replace("T", " ").slice(0, 16))}</td><td>${{new_host: "new host", new_cert: "new cert", http_change: "HTTP changed"}[e.kind] || esc(e.kind)}${e.kind === "http_change" && e.detail ? `<div class="muted" style="font-size:12px">${esc(JSON.parse(e.detail).from)} → ${esc(JSON.parse(e.detail).to)}</div>` : ""}</td>
       <td class="mono">${esc(e.domain)}</td><td class="mono">${esc(e.subject)}</td></tr>`).join("")
     : `<tr><td colspan="4" class="muted">Nothing new since the first scan of each domain. The first scan is the baseline.</td></tr>`);
   $("#scanTable").innerHTML = `<tr><th>Started</th><th>Domain</th><th>Status</th><th>Hosts</th><th>New</th><th>Sources</th></tr>` +
@@ -440,6 +521,8 @@ const elapsed = iso => { if (!iso) return ""; const t = Math.max(0, Math.round((
 // Scan results stay until dismissed (last 5); short confirmations pass a ttl in ms.
 function flash(text, bad = false, ttl = null) { notes = [...notes, {text, bad, at: Date.now(), ttl}].slice(-5); renderProgress(); }
 function describe(r) {
+  if (r.kind === "http") return r.status === "failed" ? {bad: true, text: `HTTP check failed: ${r.error}`} :
+    {text: `HTTP check done in ${r.seconds}s: ${Object.entries(r.counts).map(([k, v]) => `${v} ${k}`).join(", ") || "no hosts to check"}.`};
   if (r.kind === "dns") return r.status === "failed" ? {bad: true, text: `DNS check failed: ${r.error}`} :
     {text: `DNS check done in ${r.seconds}s: ${Object.entries(r.counts).map(([k, v]) => `${v} ${k}`).join(", ")}.`};
   if (r.status === "failed") return {bad: true, text: `Scan of ${r.domain} failed after ${r.seconds}s: ${r.error}`};
@@ -455,9 +538,10 @@ function renderProgress() {
     const lines = [];
     if (extra) lines.push(`<span class="spin"></span> ${esc(extra)}`);
     if (job.current === "dns") lines.push(`<span class="spin"></span> <b>Resolving hostnames</b> <span class="muted">${elapsed(job.current_started)}</span>`);
+    if (job.current === "http") lines.push(`<span class="spin"></span> <b>Checking hosts over HTTP</b> <span class="muted">${elapsed(job.current_started)}</span>`);
     for (const sc of job.scans) lines.push(`<span class="spin"></span> <b>Scanning ${esc(sc.domain)}</b> <span>${esc(sc.stage || "starting")}</span> <span class="muted">${elapsed(sc.started_at)} elapsed</span>`);
-    if (job.current && job.current !== "dns" && !job.scans.some(s => s.domain === job.current)) lines.push(`<span class="spin"></span> <b>Scanning ${esc(job.current)}</b> <span>starting</span>`);
-    if (job.queue.length) lines.push(`<span class="muted">Queued: ${job.queue.slice(0, 6).map(q => q === "dns" ? "DNS check" : esc(q)).join(", ")}${job.queue.length > 6 ? ` and ${job.queue.length - 6} more` : ""}</span>`);
+    if (job.current && !["dns", "http"].includes(job.current) && !job.scans.some(s => s.domain === job.current)) lines.push(`<span class="spin"></span> <b>Scanning ${esc(job.current)}</b> <span>starting</span>`);
+    if (job.queue.length) lines.push(`<span class="muted">Queued: ${job.queue.slice(0, 6).map(q => q === "dns" ? "DNS check" : q === "http" ? "HTTP check" : esc(q)).join(", ")}${job.queue.length > 6 ? ` and ${job.queue.length - 6} more` : ""}</span>`);
     parts.push(lines.map(l => `<div class="line">${l}</div>`).join("") + `<div class="bar"><i></i></div>`);
   }
   if (notes.length) parts.push(notes.map(n => `<div class="line ${n.bad ? "fail" : "done"}" style="margin-top:${parts.length ? 6 : 0}px">${n.bad ? "✕" : "✓"} ${esc(n.text)}
@@ -484,8 +568,15 @@ async function pollJob(soon = false) {
 const TABS = ["overview", "domains", "projects", "hosts", "separation", "activity"];
 let startTab = "overview";
 try { startTab = localStorage.getItem("crtwatch.tab") || "overview"; } catch (e) {}
-if (TABS.includes(location.hash.slice(1))) startTab = location.hash.slice(1);  // links like /#separation
-show(startTab);
+// Links: /#separation opens a tab, /#host=shop.example.com opens that host's details.
+function followHash() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (TABS.includes(h)) { show(h); return true; }
+  if (h.startsWith("host=")) { show("hosts"); openHost(h.slice(5)); return true; }
+  return false;
+}
+window.addEventListener("hashchange", followHash);
+if (!followHash()) show(startTab);
 pollJob();
 </script>
 </body>

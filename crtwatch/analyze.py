@@ -47,6 +47,9 @@ class Inventory:
             self.certs = {r["key"]: dict(r) for r in c.execute("SELECT * FROM certs")}
             pairs = c.execute("SELECT cert_key, host FROM cert_hosts").fetchall()
             self.separations = {frozenset((r[0], r[1])) for r in c.execute("SELECT project_a, project_b FROM separations")}
+            self.probes = {r["host"]: dict(r) for r in c.execute(
+                "SELECT host, checked_at, scheme, final_url, status, final_status, reason, title, content_type, server, redirects,"
+                " tls_error, error FROM probes")}
         dom_by_id = {d["id"]: d["name"] for d in self.domains}
         now = datetime.now(timezone.utc).isoformat()
         self.cert_names = defaultdict(set)
@@ -66,6 +69,13 @@ class Inventory:
                 if fnmatch.fnmatchcase(h["name"], r["pattern"]):
                     h["project_id"], h["rule"] = r["project_id"], r["pattern"]
                     break
+        # Where each host's HTTP redirects lead: an attacker who visits the host follows them too.
+        from .probe import redirect_hosts
+        self.redirect_targets = {}
+        for host, p in self.probes.items():
+            targets = [t for t in redirect_hosts(json.loads(p["redirects"] or "[]"), p["final_url"]) if t != host]
+            if targets:
+                self.redirect_targets[host] = targets
         self.provider_certs = set()
         for k, names in self.cert_names.items():
             foreign_roots = {root_of(n) for n in names} - self.owned_roots
@@ -117,6 +127,10 @@ def walk(inv, project_id):
                     if other in inv.hosts and not inv.hosts[other]["ignored"] and other not in seen:
                         seen[other] = (hop, f"same certificate ({_cert_ref(inv, k)})", name)
                         nxt.append(other)
+            for other in inv.redirect_targets.get(name, ()):
+                if other in inv.hosts and not inv.hosts[other]["ignored"] and other not in seen:
+                    seen[other] = (hop, "HTTP redirect", name)
+                    nxt.append(other)
         frontier = nxt
     return seen, start, roots_done
 
@@ -247,6 +261,38 @@ def findings(inv):
                 "hosts": [h["name"]],
             })
 
+    # 3b. HTTP redirects that cross into another root: anyone visiting follows them.
+    planned = {}
+    for p in inv.projects.values():
+        if p.get("planned_domain"):
+            planned.setdefault(root_of(p["planned_domain"]), []).append(p["name"])
+    cross = defaultdict(list)
+    for host, targets in inv.redirect_targets.items():
+        h = inv.hosts.get(host)
+        if not h or h["ignored"]:
+            continue
+        for t in targets:
+            tr = root_of(t)
+            if tr != h["root"]:
+                cross[(h["root"], tr)].append(f"{host} → {t}")
+    for (src, dst), pairs in sorted(cross.items()):
+        if dst in planned:
+            sev, title = "high", f"Redirects from {src} reveal the planned new domain {dst}"
+            names = sorted(planned[dst])
+            who = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+            detail = (f"{dst} is where {who} {'is' if len(names) == 1 else 'are'} meant to move. "
+                      "Anyone visiting these hosts lands on it, "
+                      "which links the old and new domains. Remove the redirects.")
+        elif dst in inv.owned_roots:
+            sev, title = "medium", f"Redirects tie {src} to {dst}"
+            detail = "Visiting these hosts lands on another of your domains, so the two are linked for anyone who looks."
+        else:
+            sev, title = "info", f"{len(pairs)} host(s) on {src} redirect to {dst}"
+            detail = ("Often a login provider or SaaS tool. If it's your own domain, add it to the inventory; "
+                      "if it's a domain a project is moving to, remove the redirect.")
+        out.append({"severity": sev, "kind": "redirect_link", "root": src, "title": title, "detail": detail,
+                    "hosts": sorted(pairs)[:50]})
+
     # 4. Names on your certs under roots you haven't added: often your own forgotten domains.
     foreign = defaultdict(set)
     for k, names in inv.cert_names.items():
@@ -287,9 +333,20 @@ def findings(inv):
 
 # --- views for the CLI / UI --------------------------------------------------------------------
 
-def host_rows(inv, domain=None, project=None, q=None, include_ignored=True):
+def http_class(p):
+    if not p:
+        return "unprobed"
+    if p["status"] is None:
+        return "skipped" if (p["error"] or "").startswith("skipped") else "down"
+    return f"{p['status'] // 100}xx"
+
+
+def host_rows(inv, domain=None, project=None, q=None, include_ignored=True, http=None):
     rows = []
     for h in inv.hosts.values():
+        p = inv.probes.get(h["name"])
+        if http and http_class(p) != http:
+            continue
         if domain and h["domain"] != domain:
             continue
         pname = inv.project_name(h["project_id"])
@@ -314,6 +371,12 @@ def host_rows(inv, domain=None, project=None, q=None, include_ignored=True):
             "certs": len(certs), "active_cert": any(c["active"] for c in certs),
             "latest_expiry": max((c["not_after"] or "" for c in certs), default=None),
             "co_names": len(others), "dns_status": h["dns_status"], "dns_detail": h["dns_detail"],
+            "http": None if not p else {
+                "class": http_class(p), "status": p["status"], "final_status": p["final_status"],
+                "reason": p["reason"], "title": p["title"],
+                "error": p["error"], "tls_error": p["tls_error"], "checked_at": p["checked_at"],
+                "redirects_to": inv.redirect_targets.get(h["name"], [])[-1:] or None,
+            },
         })
     rows.sort(key=lambda r: (r["root"], r["name"].lstrip("*.")[::-1]))
     return rows
@@ -334,11 +397,24 @@ def summary():
             "ignored": len(inv.hosts) - len(vis), "certs": len(inv.certs),
             "findings": {s: sum(1 for f in fs if f["severity"] == s) for s in SEV_ORDER},
             "violations": len(viol),
+            "http": {k: sum(1 for h in vis if http_class(inv.probes.get(h["name"])) == k)
+                     for k in ("2xx", "3xx", "4xx", "5xx", "down", "skipped", "unprobed")},
             "grouped_projects": sum(1 for p in inv.projects.values() if p.get("exposure_group")),
         },
         "findings": fs,
         "blast_radius": sorted(radius, key=lambda r: -len(r["exposes"])),
     }
+
+
+def probe_detail(host):
+    with db.session() as c:
+        r = c.execute("SELECT * FROM probes WHERE host=?", (host,)).fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    d["redirects"] = json.loads(d["redirects"] or "[]")
+    d["class"] = http_class(d)
+    return d
 
 
 def cert_list(host):

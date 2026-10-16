@@ -24,10 +24,11 @@ So one project that's easy to find can expose projects you meant to keep out of 
 - 💥 **Blast radius**: if someone finds project A, what else can they reach, and how.
 - 🚧 **Separation problems**: which projects can be "seen together" when they shouldn't be.
 - 🔀 **A rotation plan**: which projects to move to a new domain, which old hostnames to shut down, and which names are "burned" for good.
+- 🌐 **HTTP check**: visits each hostname and shows what answers, with colour-coded status codes, page titles, redirect chains, certificate problems and a safe preview of the page.
 - ✅ **New-domain checks**: whether a domain you're about to use already has a public history that links it to you.
 - 🔔 **Monitoring**: alerts in Slack or Discord when new hostnames or certificates show up.
 
-It only reads **public** data. No account, no API key, no cloud service: it all runs on your own computer or server.
+Apart from the optional HTTP check, it only reads **public** data. No account, no API key, no cloud service: it all runs on your own computer or server.
 
 ---
 
@@ -55,7 +56,7 @@ py -m venv $HOME\crtwatch-env
 & $HOME\crtwatch-env\Scripts\pip install git+https://github.com/kelvinnn/crtwatch.git
 ```
 
-No `git` installed? Download `crtwatch-1.0.0-py3-none-any.whl` from the [Releases page](https://github.com/kelvinnn/crtwatch/releases), then run the `pip install` command with the path to that file instead of the GitHub URL.
+No `git` installed? Download the `.whl` file from the latest release on the [Releases page](https://github.com/kelvinnn/crtwatch/releases), then run the `pip install` command with the path to that file instead of the GitHub URL.
 
 **2. Load the demo company** (made-up data, nothing is scanned):
 
@@ -81,7 +82,8 @@ When you're ready to use it on your own domains, follow **[📘 Getting started]
 
 | | |
 |---|---|
-| **Separation**: which projects can be seen together, and the exact trail an attacker would follow<br>![Separation tab](docs/images/separation.png) | **Hosts**: every hostname, its project, its certificates, and whether it's still live<br>![Hosts tab](docs/images/hosts.png) |
+| **Hosts**: every hostname, its project, DNS status and HTTP status code with the page title<br>![Hosts tab](docs/images/hosts.png) | **Host details**: what answers (status, redirects, server, certificate), a text preview, and every certificate the name appears on<br>![Host details](docs/images/host-drawer.png) |
+| **Separation**: which projects can be seen together, and the exact trail an attacker would follow<br>![Separation tab](docs/images/separation.png) | **Overview**: all findings and each project's blast radius<br>![Overview](docs/images/overview.png) |
 
 ---
 
@@ -111,6 +113,7 @@ The database crtwatch builds is a **map of your attack surface**, including the 
 - By default the dashboard only listens on your own computer (`127.0.0.1`).
 - To open it to a network you must set a password (`CRTWATCH_PASSWORD`). crtwatch refuses to start otherwise.
 - Never commit your `data/` folder or `*.db` files to git. The included `.gitignore` already excludes them.
+- The **HTTP check is the only feature that connects to your servers**, and it only runs when you ask for it. It skips hosts on private or internal addresses unless you allow them.
 
 ---
 

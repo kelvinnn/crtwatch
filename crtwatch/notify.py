@@ -22,6 +22,8 @@ def _line(e):
         sans = detail.get("sans", [])
         extra = f" (+{len(sans) - 5} more)" if len(sans) > 5 else ""
         return f"• new cert on {e['domain']} by {detail.get('issuer') or '?'}: {', '.join(sans[:5])}{extra}"
+    if e["kind"] == "http_change":
+        return f"• `{e['subject']}` now answers {detail.get('to')} (was {detail.get('from')})"
     return f"• {e['kind']} {e['subject']}"
 
 

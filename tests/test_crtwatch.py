@@ -40,7 +40,9 @@ def fake_source(domain):
     return CT.get(domain, []), []
 
 
-class CrtwatchTest(unittest.TestCase):
+class Fixture(unittest.TestCase):
+    """The Acme company above, scanned into a fresh database."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         db.DB_PATH = os.path.join(self.tmp.name, "test.db")
@@ -67,6 +69,9 @@ class CrtwatchTest(unittest.TestCase):
     def tearDown(self):
         self.patch.stop()
         self.tmp.cleanup()
+
+
+class CrtwatchTest(Fixture):
 
     # --- scanning ---------------------------------------------------------------------------
 
@@ -184,6 +189,90 @@ class CrtwatchTest(unittest.TestCase):
         self.assertFalse(clean["registered"])
         self.assertEqual(linked["verdict"], "linked")
         self.assertEqual(linked["linked_names"], ["www.acme.com"])
+
+
+class ProbeTest(unittest.TestCase):
+    """HTTP check against a throwaway local server."""
+
+    @classmethod
+    def setUpClass(cls):
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/":
+                    self.send_response(301)
+                    self.send_header("Location", "/home")
+                    self.end_headers()
+                    return
+                body = (b"<html><head><title>Staff &amp; Partners</title><style>p{}</style></head>"
+                        b"<body><h1>Welcome</h1><script>track()</script><p>Sign in below.</p></body></html>")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Server", "test-server")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        cls.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        cls.base = f"http://127.0.0.1:{cls.server.server_port}/"
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_private_addresses_are_refused_by_default(self):
+        from crtwatch import probe
+        with mock.patch.object(probe, "ALLOW_PRIVATE", False):
+            with self.assertRaises(probe.Blocked):
+                probe._fetch(self.base, timeout=5)
+
+    def test_redirects_title_and_snippet(self):
+        from crtwatch import probe
+        with mock.patch.object(probe, "ALLOW_PRIVATE", True):
+            r = probe._fetch(self.base, timeout=5)
+        self.assertEqual(r["redirects"][0]["status"], 301)
+        self.assertEqual(r["final_url"], self.base + "home")
+        self.assertEqual(r["status"], 200)
+        title, snippet, page = probe.summarize(r["body"], r["headers"]["content-type"])
+        self.assertEqual(title, "Staff & Partners")
+        self.assertEqual(snippet, "Welcome Sign in below.")   # no title, script or style text
+        self.assertIn("<h1>Welcome</h1>", page)
+
+
+class RedirectPivotTest(Fixture):
+    """A redirect between two projects' hosts links them, just like a shared certificate."""
+
+    def test_redirect_is_a_pivot(self):
+        import json as _json
+        with db.session() as c:
+            c.execute("INSERT INTO probes(host, checked_at, status, final_status, final_url, redirects) VALUES (?,?,?,?,?,?)",
+                      ("portal.acme-ops.io", db.now(), 302, 200, "https://admin.acme-ops.io/",
+                       _json.dumps([{"status": 302, "from": "https://portal.acme-ops.io/", "to": "https://admin.acme-ops.io/"}])))
+            ids = {r["name"]: r["id"] for r in c.execute("SELECT id, name FROM projects")}
+            db.add_separation(c, ids["Portal"], ids["Admin"])
+        inv = analyze.Inventory()
+        self.assertEqual(inv.redirect_targets["portal.acme-ops.io"], ["admin.acme-ops.io"])
+        v = [x for x in separation.violations(inv) if {x["a"], x["b"]} == {"Portal", "Admin"}]
+        self.assertEqual(v[0]["cause"], "same root domain")  # both on acme-ops.io: root wins as the cause
+        row = next(r for r in analyze.host_rows(inv) if r["name"] == "portal.acme-ops.io")
+        self.assertEqual(row["http"]["class"], "3xx")
+        self.assertEqual(row["http"]["redirects_to"], ["admin.acme-ops.io"])
+
+    def test_cross_root_redirect_finding(self):
+        import json as _json
+        with db.session() as c:
+            c.execute("INSERT INTO probes(host, checked_at, status, final_status, final_url, redirects) VALUES (?,?,?,?,?,?)",
+                      ("payroll.acme.com", db.now(), 301, 200, "https://pay.acme-new.dev/",
+                       _json.dumps([{"status": 301, "from": "https://payroll.acme.com/", "to": "https://pay.acme-new.dev/"}])))
+            c.execute("UPDATE projects SET planned_domain='acme-new.dev' WHERE name='Payroll'")
+        fs = [f for f in analyze.findings(analyze.Inventory()) if f["kind"] == "redirect_link"]
+        self.assertEqual(fs[0]["severity"], "high")
+        self.assertIn("planned new domain acme-new.dev", fs[0]["title"])
 
 
 class DemoTest(unittest.TestCase):

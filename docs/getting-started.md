@@ -11,7 +11,7 @@ This guide takes you from nothing to a finished rotation plan for your own domai
 5. [Add your domains](#step-5-add-your-domains)
 6. [Tell crtwatch about your projects](#step-6-tell-crtwatch-about-your-projects)
 7. [Sort out the leftovers](#step-7-sort-out-the-leftovers)
-8. [Check which hostnames are still live](#step-8-check-which-hostnames-are-still-live)
+8. [Check which hostnames are still live, and what answers](#step-8-check-which-hostnames-are-still-live-and-what-answers)
 9. [Decide who may be seen together](#step-9-decide-who-may-be-seen-together)
 10. [Read the violations](#step-10-read-the-violations)
 11. [Follow the rotation plan](#step-11-follow-the-rotation-plan)
@@ -93,8 +93,8 @@ To use the short `crtwatch` command in this window, activate the environment:
 
 The install command above needs `git`. Without it:
 
-1. Go to the [Releases page](https://github.com/kelvinnn/crtwatch/releases) and download **`crtwatch-1.0.0-py3-none-any.whl`**.
-2. Run the same `pip install` command, but with the path to the downloaded file instead of the GitHub address, e.g. `~/crtwatch-env/bin/pip install ~/Downloads/crtwatch-1.0.0-py3-none-any.whl`.
+1. Go to the [Releases page](https://github.com/kelvinnn/crtwatch/releases) and, under the latest release, download the file ending in **`.whl`**.
+2. Run the same `pip install` command, but with the path to the downloaded file instead of the GitHub address, e.g. `~/crtwatch-env/bin/pip install ~/Downloads/crtwatch-1.1.0-py3-none-any.whl` (use the file name you actually downloaded).
 
 ### Check it worked
 
@@ -102,7 +102,7 @@ The install command above needs `git`. Without it:
 crtwatch --version
 ```
 
-You should see `crtwatch 1.0.0`. 🎉
+You should see `crtwatch` and a version number. 🎉
 
 > 📌 **Every time you open a new terminal**, activate the environment again (the `source …` or `Activate.ps1` line) before using `crtwatch`. If you forget, you'll get "command not found". The rest of this guide assumes it's activated.
 
@@ -220,9 +220,13 @@ Don't worry about getting everything perfect; you can come back any time.
 
 ---
 
-## Step 8: Check which hostnames are still live
+## Step 8: Check which hostnames are still live, and what answers
 
-CT logs keep names **forever**, even for things you shut down years ago. To tell what still works from what's just history, go to the **Domains** tab and click **DNS check**.
+CT logs keep names **forever**, even for things you shut down years ago. Two checks tell you what's still real.
+
+### 8a. DNS check
+
+Go to the **Domains** tab and click **DNS check**.
 
 Back in **Hosts**, the **DNS** column now shows:
 
@@ -232,6 +236,32 @@ Back in **Hosts**, the **DNS** column now shows:
 | `nxdomain` | The name no longer exists. Only history. |
 | `no_address` | The name exists but doesn't point to a server. |
 | 🔴 `dangling` | **Fix this first.** The name points to a third-party service that no longer exists. Someone else could claim that service and take over your hostname (a "subdomain takeover"). Remove the DNS record. |
+
+### 8b. HTTP check (see what each host shows the world)
+
+On the **Domains** tab, click **HTTP check**. crtwatch visits every live hostname (first `https://`, then `http://`) and records what answers.
+
+> ⚠️ This is the one check that **connects to your servers**. Everything else only reads public logs. It's harmless (one normal page request per host), but run it on hosts you're responsible for. Hosts on private or internal addresses are skipped.
+
+The **HTTP** column in **Hosts** then shows a coloured status code:
+
+| Looks like | Meaning | What to think about |
+|---|---|---|
+| 🟢 `200` + page title | The page loads. | Should this be public? A login page for an internal tool, for example, tells attackers it exists. |
+| 🔵 `301` / `302` → somewhere | Redirects elsewhere. The target is shown underneath. | A redirect to **another of your domains links the two**, just like a shared certificate. Never redirect an old hostname to a project's new domain. |
+| 🟡 `401` / `403` / `404` | Asks for a password, blocks you, or says "not found". | The server is still running. If nothing should be there, switch it off. |
+| 🔴 `500`–`599` | Server error. | Often forgotten or broken systems: good candidates for clean-up. |
+| ⚪ `timeout`, `no DNS`, `TLS error` | Nothing usable answered. | Fine if the host is retired; otherwise worth a look. |
+
+A red ⚠︎ next to a status means the site's certificate is broken (expired, self-signed or for the wrong name).
+
+**Click a hostname** for the details: the full redirect chain, server, content type, certificate status, and a text preview of the page. **Show rendered preview** draws the page as it looks, but safely: scripts don't run and nothing is loaded from the site.
+
+![Host details with HTTP card](images/host-drawer.png)
+
+Use the **any HTTP result** filter in Hosts to list, say, every `5xx` or every redirect. To check one host again, open it and click **Recheck**.
+
+> 🔗 You can share a direct link to a host's details: `http://127.0.0.1:8080/#host=shop.yourcompany.com`.
 
 ---
 
@@ -261,7 +291,8 @@ The **Violations** section lists every pair of projects that can currently be se
 |---|---|---|
 | 🟧 **ROOT DOMAIN** | Both projects live under the same main domain, so one crt.sh search shows both. | `shop.acme.com` and `payroll.acme.com` |
 | 🟥 **CERTIFICATE** | At some point one certificate listed both projects' hostnames. That link is public **forever**, even if they're on different domains. | one old certificate for `payroll.acme.com` and `admin.acme-ops.io` |
-| 🟨 **INDIRECT** | No direct link, but a chain of the two above connects them. | shop → (same domain) → payroll → (same certificate) → ops admin |
+| 🟦 **REDIRECT** | One project's hostname redirects to the other's (found by the HTTP check). | `old-portal.acme.com` → `portal.acme-partners.io` |
+| 🟨 **INDIRECT** | No direct link, but a chain of the ones above connects them. | shop → (same domain) → payroll → (same certificate) → ops admin |
 
 Read each trail from left to right. Every arrow is one free, public lookup.
 
@@ -304,7 +335,7 @@ Below the violations, the **Rotation plan** tells you what to do.
 
 New certificates can quietly re-link projects, for example when someone requests one certificate covering two sites. To catch that:
 
-- Leave crtwatch running with automatic rescans: `crtwatch serve --every 6h`.
+- Leave crtwatch running with automatic rescans: `crtwatch serve --every 6h`. To also re-run the DNS and HTTP checks after each round, set `CRTWATCH_DNS=1` and `CRTWATCH_PROBE=1`. You'll then be alerted when a host's HTTP status changes, e.g. a forgotten server suddenly answering `200`.
 - New hostnames and certificates show up in the **Activity** tab:
 
 ![Activity tab](images/activity.png)
@@ -389,6 +420,8 @@ Your data is kept, and older databases are upgraded automatically. With Docker: 
 | **Blast radius** | Everything an attacker can reach from one project. |
 | **Burned name** | A hostname that old certificates have already publicly linked to the wrong project. |
 | **Dangling CNAME** | A DNS record pointing to a service that no longer exists. A takeover risk. |
+| **HTTP status code** | The three-digit answer a web server gives: 2xx = OK, 3xx = redirect, 4xx = refused or not found, 5xx = server error. |
+| **Redirect** | A server telling the browser "go to this other address instead". |
 | **Baseline** | The first scan of a domain. Only things found after it count as "new". |
 
 ---
@@ -396,7 +429,10 @@ Your data is kept, and older databases are upgraded automatically. With Docker: 
 ## Common questions
 
 **Is this legal? Am I "hacking" anything?**
-crtwatch only reads public certificate logs and asks public DNS servers about hostnames. It never connects to your servers, or anyone else's. That said, use it on domains you own or are responsible for.
+crtwatch reads public certificate logs and asks public DNS servers about hostnames. The optional HTTP check loads each host's front page once, as a normal browser visit would. Nothing is attacked or brute-forced. Still, only use it on domains you own or are responsible for.
+
+**The HTTP check says `skipped` for some hosts.**
+Those hostnames point to private or internal addresses (such as `10.x.x.x`), which crtwatch won't visit by default. If you're inside your own network and want them checked, run `crtwatch probe --allow-private`.
 
 **A scan says `crtsh_pg failed`.**
 crt.sh's database is busy, or your network blocks outgoing connections on port 5432 (some office networks do). crtwatch falls back to other sources automatically, but those can miss some cross-domain links. Try again later or from another network for complete results.

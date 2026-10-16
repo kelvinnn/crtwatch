@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from . import analyze, db, dnscheck, scan, separation
+from . import analyze, db, dnscheck, probe, scan, separation
 
 log = logging.getLogger("crtwatch.web")
 SCAN_EVERY = None  # seconds, set by `serve --every`
@@ -67,15 +67,18 @@ class Jobs:
         self.recent = []         # newest last
         self.worker = None
 
-    def enqueue(self, domains=(), dns=False):
+    def enqueue(self, domains=(), dns=False, http=False):
         with self.lock:
             for d in domains:
                 if d != self.current and d not in self.queue:
                     self.queue.append(d)
-            if dns or (domains and os.environ.get("CRTWATCH_DNS") == "1"):
-                if "dns" in self.queue:
-                    self.queue.remove("dns")
-                self.queue.append("dns")  # always after the scans it follows
+            # DNS and HTTP checks always run after the scans they follow, DNS first (HTTP skips dead names).
+            for item, wanted in (("dns", dns or (domains and os.environ.get("CRTWATCH_DNS") == "1")),
+                                 ("http", http or (domains and os.environ.get("CRTWATCH_PROBE") == "1"))):
+                if wanted:
+                    if item in self.queue:
+                        self.queue.remove(item)
+                    self.queue.append(item)
             if self.worker is None or not self.worker.is_alive():
                 self.worker = threading.Thread(target=self._drain, daemon=True)
                 self.worker.start()
@@ -92,11 +95,13 @@ class Jobs:
             try:
                 if item == "dns":
                     r = {"kind": "dns", "counts": dnscheck.check_hosts(), "status": "ok"}
+                elif item == "http":
+                    r = {"kind": "http", "counts": probe.probe_hosts(), "status": "ok"}
                 else:
                     r = {"kind": "scan", **scan.scan_domain(item)}
             except Exception as e:
                 log.exception("job %s failed", item)
-                r = {"kind": "dns" if item == "dns" else "scan", "domain": item, "status": "failed", "error": str(e)[:300]}
+                r = {"kind": item if item in ("dns", "http") else "scan", "domain": item, "status": "failed", "error": str(e)[:300]}
             r.update(finished_at=db.now(), seconds=round(time.time() - t0))
             with self.lock:
                 self.recent = (self.recent + [r])[-20:]
@@ -182,7 +187,7 @@ def patch_domain(name: str, payload: dict = Body(...)):
 
 @app.post("/api/scan")
 def start_scan(payload: dict = Body(default={})):
-    jobs.enqueue(payload.get("domains") or scan.enabled_domains(), dns=bool(payload.get("dns")))
+    jobs.enqueue(payload.get("domains") or scan.enabled_domains(), dns=bool(payload.get("dns")), http=bool(payload.get("http")))
     return jobs.snapshot()
 
 
@@ -190,6 +195,30 @@ def start_scan(payload: dict = Body(default={})):
 def start_dns():
     jobs.enqueue(dns=True)
     return jobs.snapshot()
+
+
+@app.post("/api/probe")
+def start_probe():
+    jobs.enqueue(http=True)
+    return jobs.snapshot()
+
+
+@app.post("/api/probe/host")
+def probe_one(host: str):
+    """Check a single host right away (a few seconds at most)."""
+    with db.session() as c:
+        if not c.execute("SELECT 1 FROM hosts WHERE name=?", (host,)).fetchone():
+            raise HTTPException(404, "unknown host")
+    probe.probe_hosts([host])
+    return analyze.probe_detail(host)
+
+
+@app.get("/api/probe")
+def get_probe(host: str):
+    d = analyze.probe_detail(host)
+    if d is None:
+        raise HTTPException(404, "not probed yet")
+    return d
 
 
 @app.get("/api/jobs")
@@ -263,8 +292,8 @@ def delete_rule(rid: int):
 
 
 @app.get("/api/hosts")
-def list_hosts(domain: str = None, project: str = None, q: str = None):
-    return analyze.host_rows(analyze.Inventory(), domain=domain, project=project, q=q)
+def list_hosts(domain: str = None, project: str = None, q: str = None, http: str = None):
+    return analyze.host_rows(analyze.Inventory(), domain=domain, project=project, q=q, http=http)
 
 
 @app.post("/api/hosts/assign")

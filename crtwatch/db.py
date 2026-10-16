@@ -83,6 +83,26 @@ CREATE TABLE IF NOT EXISTS candidates (
     verdict TEXT NOT NULL,
     detail TEXT NOT NULL
 );
+-- Latest HTTP check per host (crtwatch probe). Only the newest result is kept.
+CREATE TABLE IF NOT EXISTS probes (
+    host TEXT PRIMARY KEY,
+    checked_at TEXT NOT NULL,
+    scheme TEXT,
+    url TEXT,
+    final_url TEXT,
+    status INTEGER,                         -- what the hostname itself answered (e.g. 301)
+    final_status INTEGER,                   -- after following redirects
+    reason TEXT,
+    title TEXT,
+    content_type TEXT,
+    server TEXT,
+    length INTEGER,
+    redirects TEXT NOT NULL DEFAULT '[]',   -- JSON list of {status, from, to}
+    tls_error TEXT,
+    snippet TEXT,
+    html TEXT,                              -- first part of the page, 2xx HTML only, for the preview
+    error TEXT
+);
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
     ts TEXT NOT NULL,
@@ -127,6 +147,7 @@ MIGRATIONS = [
     ("projects", "planned_domain", "TEXT NOT NULL DEFAULT ''"),  # where the project will be rotated to
     ("domains", "keep_group", "TEXT NOT NULL DEFAULT ''"),       # group that stays on this root when splitting
     ("scans", "stage", "TEXT"),                                   # what a running scan is doing right now
+    ("probes", "final_status", "INTEGER"),
 ]
 
 

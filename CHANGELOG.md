@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0
+
+- **HTTP check** (`crtwatch probe`, or the *HTTP check* button): visits each host and records its status code, redirect chain, page title, server, certificate problems and a text preview. Private and internal addresses are skipped unless allowed.
+- Hosts table: colour-coded status pills with titles and redirect targets, and an HTTP filter. Host details: an HTTP card with a sandboxed rendered preview (no scripts, no network).
+- Redirects are now an attacker pivot: they count towards blast radius and separation violations (new cause: *redirect*). New finding for redirects that cross domains, rated high when they reveal a planned new domain.
+- `http_change` alerts when a host's HTTP result changes between checks. `CRTWATCH_PROBE=1` runs the check after scheduled scans.
+- Direct links to a host's details (`/#host=NAME`), and tab links now work without reloading.
+
 ## 1.0.0
 
 First release.

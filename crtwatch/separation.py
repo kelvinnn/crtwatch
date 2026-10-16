@@ -80,10 +80,15 @@ def violations(inv):
         certs_a = set().union(*(inv.host_certs.get(h["name"], set()) for h in ha)) if ha else set()
         certs_b = set().union(*(inv.host_certs.get(h["name"], set()) for h in hb)) if hb else set()
         shared_certs = certs_a & certs_b
+        names_a, names_b = {h["name"] for h in ha}, {h["name"] for h in hb}
+        redirect = any(t in names_b for n in names_a for t in inv.redirect_targets.get(n, ())) or \
+            any(t in names_a for n in names_b for t in inv.redirect_targets.get(n, ()))
         if shared_roots:
             cause = "same root domain"
         elif shared_certs:
             cause = "same certificate"
+        elif redirect:
+            cause = "redirect"
         else:
             cause = "indirect"
         pa, pb = inv.projects[a], inv.projects[b]
@@ -97,7 +102,7 @@ def violations(inv):
             "active_shared_certs": sum(1 for k in shared_certs if inv.certs.get(k, {}).get("active")),
             "path": v["path"],
         })
-    order = {"same root domain": 0, "same certificate": 1, "indirect": 2}
+    order = {"same root domain": 0, "same certificate": 1, "redirect": 2, "indirect": 3}
     return sorted(result, key=lambda r: (order[r["cause"]], r["hops"], r["a"], r["b"]))
 
 
@@ -235,6 +240,8 @@ def _after_moves(inv, movers):
         elif v["cause"] == "same certificate":
             v["fix"] = ("These hostnames already sit on a shared certificate, which stays public forever. "
                         "Rotate one side's hostnames to new names and issue separate certificates from now on.")
+        elif v["cause"] == "redirect":
+            v["fix"] = "One project's hosts redirect to the other's. Remove the redirect; serve a plain 404 or retire the name instead."
         elif v["cause"] == "indirect":
             v["fix"] = "Linked through other hosts: follow the path and break the weakest link (often an unassigned host)."
         else:

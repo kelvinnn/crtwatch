@@ -2,4 +2,4 @@
 
 # Copyright (c) 2026 Kelvin Leong. All rights reserved. Internal use only; see LICENSE.
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

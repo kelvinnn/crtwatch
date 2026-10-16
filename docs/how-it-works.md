@@ -26,6 +26,7 @@ This document explains what crtwatch does under the hood: where its data comes f
 | `analyze.py` | Loads everything into memory, maps hosts to projects, walks the attacker pivots, and produces findings. |
 | `separation.py` | Exposure groups and pair rules, violations, the rotation plan, and new-domain vetting. |
 | `dnscheck.py` | Resolves hosts and detects dangling CNAMEs. |
+| `probe.py` | The HTTP check: visits hosts, records status, redirects, title and a preview. The only module that connects to your servers. |
 | `notify.py` | Sends new events to a webhook. |
 | `cli.py` | The `crtwatch` command. |
 | `demo.py` | The made-up *Acme* company loaded by `crtwatch demo`. |
@@ -85,7 +86,8 @@ scans, events, candidates
 | `rules` | `project_id`, `pattern` |
 | `separations` | `project_a`, `project_b` (pair rules) |
 | `scans` | `status` (`running`, `ok`, `partial`, `failed`, `interrupted`), `stage`, counts, `error` |
-| `events` | `kind`, `domain`, `subject`, `detail`, `notified` |
+| `probes` | `host`, `status` (what the host itself answered), `final_status` (after redirects), `final_url`, `redirects` (JSON chain), `title`, `server`, `content_type`, `tls_error`, `snippet`, `html` (preview), `error` |
+| `events` | `kind` (`new_host`, `new_cert`, `http_change`), `domain`, `subject`, `detail`, `notified` |
 | `candidates` | `domain`, `verdict`, `detail` from new-domain vetting |
 
 A scan is `partial` when only the name sources worked, so no certificate data came back. The schema is created on first run, and columns added in later versions are added automatically when an older database is opened.
@@ -98,7 +100,7 @@ Each host's **root** is its registrable domain, worked out with the public suffi
 
 ## 4. The attacker walk
 
-`analyze.walk()` simulates an attacker who starts from one project's hosts and keeps applying two pivots until nothing new turns up:
+`analyze.walk()` simulates an attacker who starts from one project's hosts and keeps applying pivots until nothing new turns up. The two CT pivots are always used; a third is added once you've run the HTTP check:
 
 ```
 frontier = the project's hosts
@@ -106,10 +108,11 @@ repeat:
     for each host in frontier:
         root pivot: if its root hasn't been searched yet, add every host under that root
         cert pivot: for each certificate naming the host not opened yet, add every name on it that is a known host
+        redirect pivot: if the host's HTTP check redirected, add every known host the redirect chain passes through
     frontier = hosts added in this round   (one round = one hop)
 ```
 
-Ignored hosts are skipped. For every host it reaches, the walk records the hop count, the pivot that found it, and the host it came from, so any result can be traced back step by step. Both pivots are always available to an attacker: crt.sh's search is public, and so is every name on every logged certificate.
+Ignored hosts are skipped. For every host it reaches, the walk records the hop count, the pivot that found it, and the host it came from, so any result can be traced back step by step. All three pivots are available to anyone: crt.sh's search is public, every name on every logged certificate is public, and anyone can visit a hostname and see where it redirects.
 
 **Blast radius** is the walk's result grouped by project: for each other project, how many of its hosts were reached, the fewest hops, and an example path.
 
@@ -121,6 +124,9 @@ Ignored hosts are skipped. For every host it reaches, the walk records the hop c
 | `cert_link` | high | One certificate names hosts of two or more projects on the same root. |
 | `shared_root` | high | Two or more projects have hosts under the same root. |
 | `dangling_cname` | high | A host's CNAME points to a name that doesn't exist (subdomain takeover candidate). Needs a DNS check. |
+| `redirect_link` to a planned domain | high | A host's redirect chain lands on a domain a project is planned to move to. This links old and new before the move has even happened. |
+| `redirect_link` to your own domain | medium | A host redirects into another of your root domains. |
+| `redirect_link` elsewhere | info | A host redirects to a domain not in the inventory. Often a login provider; sometimes a domain you forgot to add. |
 | `cert_link` (roots only) | medium | One certificate ties several of your root domains together, revealing a common owner. |
 | `unassigned_on_shared_root` | medium | Unassigned hosts next to mapped projects. |
 | `unassigned` | low | Unassigned hosts on a root with no mapped projects. |
@@ -146,6 +152,7 @@ For every constrained project, crtwatch runs the walk and looks at the first hos
 
 - **same root domain**: the two projects share a root, so one crt.sh search reveals both;
 - **same certificate**: some certificate names hosts of both;
+- **redirect**: a host of one redirects to a host of the other (from the HTTP check);
 - **indirect**: neither, but a chain through other hosts connects them, for example A → shared root → unassigned host → shared certificate → B.
 
 The full path is included, one pivot per step.
@@ -173,7 +180,21 @@ The plan works from what CT shows. It can't see links through shared IP addresse
 
 It also looks up the domain's name servers. NXDOMAIN means the domain isn't registered. Results are saved in `candidates` and used by the plan's planned-domain checks.
 
-## 7. DNS check
+## 7. HTTP check
+
+`probe.py` visits each eligible host. Wildcards, ignored hosts, and (by default) names DNS says don't exist are skipped.
+
+1. **Safety check.** The hostname is resolved first. If every address is private, loopback or link-local (`10.x`, `192.168.x`, `127.x`, `169.254.x`, …), the host is recorded as `skipped` and not contacted, unless private probing is enabled. The same check applies to every redirect target, so a public host can't bounce the checker into an internal service or a cloud metadata endpoint.
+2. **Request.** `GET /` over `https://` with certificate verification. If verification fails, the error is recorded and the request is repeated without verification, so you still see what's there. If HTTPS fails entirely, `http://` is tried. A single request, an identifying user agent, an 8-second timeout, and at most 256 KB of body read.
+3. **Redirects** are followed by hand, up to 5 hops, and every hop is recorded. `status` is what the hostname itself answered (e.g. `302`); `final_status` is what the chain ended on.
+4. **Summary.** The page `<title>`; a text snippet of up to 600 characters, with head, script and style content removed and tags stripped; and, for successful HTML pages, the first 24 KB of markup for the preview.
+5. **Change events.** If a host's result class (`2xx`, `3xx`, `4xx`, `5xx`, `down`) differs from the previous check, an `http_change` event is recorded and sent to the webhook.
+
+Only the latest result per host is kept. 16 hosts are checked in parallel.
+
+**Displaying results safely.** Page content comes from the outside world, so the dashboard treats it as untrusted. Titles and snippets are always shown as escaped text. The optional rendered preview goes in an `<iframe sandbox>` with no permissions, so scripts don't run and forms don't submit. A Content-Security-Policy of `default-src 'none'` means it can't load anything from the network either: no images, stylesheets or tracking pixels from the site, only inline styles.
+
+## 8. DNS check
 
 For each non-wildcard host, crtwatch looks up its CNAME, A and AAAA records using `CRTWATCH_RESOLVERS`:
 
@@ -185,10 +206,10 @@ For each non-wildcard host, crtwatch looks up its CNAME, A and AAAA records usin
 | `dangling` | It's a CNAME, it has no address, and the CNAME target doesn't exist. |
 | `error` | The resolvers timed out or failed. |
 
-32 lookups run in parallel. Only public resolvers are contacted; your servers are never touched.
+32 lookups run in parallel. Only public resolvers are contacted: the DNS check never connects to your servers (the HTTP check does).
 
-## 8. Limits
+## 9. Limits
 
 - CT only shows names that appear on certificates. A host that has only ever been covered by a wildcard certificate is invisible here, and to attackers using CT.
-- Attackers have other ways to link projects that crtwatch doesn't check: shared IP addresses and hosting, page or favicon fingerprints, analytics or tracking IDs, WHOIS records, and organisation names on OV/EV certificates.
+- Attackers have other ways to link projects that crtwatch doesn't check yet: shared IP addresses and hosting, page or favicon fingerprints, analytics or tracking IDs, WHOIS records, and organisation names on OV/EV certificates. The HTTP check's titles, server headers and previews make some of these easy to spot by eye.
 - The crt.sh database is a free community service. When it's overloaded, scans fall back to sources with less detail; see Troubleshooting in the [user guide](guide.md).

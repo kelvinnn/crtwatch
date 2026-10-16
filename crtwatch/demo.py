@@ -58,6 +58,61 @@ DNS = {
 }
 
 
+def _page(title, body, color="#1d4ed8"):
+    return (f"<!doctype html><html><head><title>{title}</title><style>body{{font:16px system-ui;margin:0;color:#111}}"
+            f"header{{background:{color};color:#fff;padding:18px 28px;font-weight:600}}main{{padding:28px;max-width:640px}}"
+            f"input,button{{font:inherit;padding:8px 10px;margin:4px 0;display:block}}button{{background:{color};color:#fff;border:0;border-radius:4px}}"
+            f"</style></head><body><header>{title}</header><main>{body}</main></body></html>")
+
+
+# host: (scheme, status, reason, title, content type, server, redirect target, tls error, body or error)
+PROBES = {
+    "shop.acme-example.com": ("https", 200, "OK", "Acme Shop: everything for your workshop", "text/html", "nginx", None, None,
+                              _page("Acme Shop: everything for your workshop", "<h1>Spring sale</h1><p>Up to 30% off hand tools and workbenches. Free delivery over $50.</p><p><a href='#'>Browse the catalogue</a></p>")),
+    "www.shop.acme-example.com": ("https", 301, "Moved Permanently", None, "text/html", "nginx", "https://shop.acme-example.com/", None, None),
+    "api.shop.acme-example.com": ("https", 200, "OK", None, "application/json", "envoy", None, None, '{"status": "ok", "service": "catalog-api", "version": "3.2.1"}'),
+    "acme-example.com": ("https", 200, "OK", "Acme | Tools that last", "text/html", "cloudflare", None, None,
+                         _page("Acme | Tools that last", "<h1>Built to last since 1952</h1><p>Family-owned maker of hand tools.</p>", "#0f766e")),
+    "www.acme-example.com": ("https", 301, "Moved Permanently", None, "text/html", "cloudflare", "https://acme-example.com/", None, None),
+    "payroll.acme-example.com": ("https", 200, "OK", "Acme Payroll - Sign in", "text/html", "Microsoft-IIS/10.0", None, None,
+                                 _page("Acme Payroll - Sign in", "<h2>Employee sign-in</h2><input placeholder='Employee ID'><input type='password' placeholder='Password'><button>Sign in</button>", "#7c3aed")),
+    "staging.payroll.acme-example.com": ("https", 503, "Service Unavailable", "503 Service Unavailable", "text/html", "nginx", None, None,
+                                         "<html><head><title>503 Service Unavailable</title></head><body><h1>503 Service Unavailable</h1></body></html>"),
+    # The mistake the redirect check catches: HR already points at the domain it's supposed to move to in secret.
+    "hr.acme-example.com": ("https", 302, "Found", None, "text/html", "nginx", "https://hr.acme-people-example.com/", None, None),
+    "admin.acme-ops-example.io": ("https", 401, "Unauthorized", "401 Authorization Required", "text/html", "nginx", None, None,
+                                  "<html><head><title>401 Authorization Required</title></head><body><center><h1>401 Authorization Required</h1></center></body></html>"),
+    "grafana.acme-ops-example.io": ("https", 200, "OK", "Grafana", "text/html", None, None, "self-signed certificate",
+                                    _page("Grafana", "<h2>Welcome to Grafana</h2><input placeholder='email or username'><input type='password' placeholder='password'><button>Log in</button>", "#f46800")),
+    "partners.acme-ops-example.io": ("https", 403, "Forbidden", "Attention Required!", "text/html", "cloudflare", None, None,
+                                     "<html><head><title>Attention Required!</title></head><body><h1>Sorry, you have been blocked</h1></body></html>"),
+    "v2.partners.acme-ops-example.io": ("https", 200, "OK", None, "application/json", "envoy", None, None, '{"error": "missing api key", "docs": "/v2/docs"}'),
+    "status.acme-example.com": ("https", 200, "OK", "Acme Status", "text/html", "cloudflare", None, None,
+                                _page("Acme Status", "<h2>All systems operational</h2><p>Shop · Payments · Delivery tracking</p>", "#16a34a")),
+    "vpn.acme-ops-example.io": (None, None, None, None, None, None, None, None, "timeout"),
+    "old-crm.acme-example.com": (None, None, None, None, None, None, None, None, "DNS: nodename nor servname provided, or not known"),
+}
+
+
+def _store_probes(c):
+    from .probe import summarize
+    for host, (scheme, status, reason, title, ctype, server, target, tls, body) in PROBES.items():
+        url = f"https://{host}/"
+        if status is None:
+            c.execute("INSERT OR REPLACE INTO probes(host, checked_at, scheme, error) VALUES (?,?,?,?)",
+                      (host, db.now(), "https", body))
+            continue
+        redirects = [{"status": status, "from": url, "to": target}] if target else []
+        final = target or url
+        _, snippet, page = summarize(body.encode(), ctype) if body else (None, None, None)
+        c.execute(
+            "INSERT OR REPLACE INTO probes(host, checked_at, scheme, url, final_url, status, final_status, reason, title,"
+            " content_type, server, length, redirects, tls_error, snippet, html, error)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)",
+            (host, db.now(), scheme, url, final, status, 200 if target else status, reason, title, ctype,
+             server, len(body or ""), json.dumps(redirects), tls, snippet, page if status == 200 else None))
+
+
 def load():
     """Fill the current database with the demo company. Refuses to touch a database that has data."""
     with db.session() as c:
@@ -93,4 +148,5 @@ def load():
         db.add_event(c, "new_cert", "acme-ops-example.io", "vpn.acme-ops-example.io",
                      {"sans": ["vpn.acme-ops-example.io"], "issuer": "C=US, O=Let's Encrypt, CN=R11"})
         db.add_event(c, "new_host", "acme-ops-example.io", "vpn.acme-ops-example.io", {"sources": ["demo"]})
+        _store_probes(c)
         c.execute("UPDATE events SET notified=1")
